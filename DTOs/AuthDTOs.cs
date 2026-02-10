@@ -27,12 +27,29 @@ public class LoginRequest
 
     [Required]
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>
+    /// MFA verification token (TOTP code or backup code)
+    /// Only required if MFA is enabled
+    /// </summary>
+    [StringLength(20)]
+    public string? MFAToken { get; set; }
 }
 
 public class LoginResponse
 {
-    public string Token { get; set; } = string.Empty;
-    public UserResponse User { get; set; } = null!;
+    public string? Token { get; set; }
+    public UserResponse? User { get; set; }
+
+    /// <summary>
+    /// Session token for MFA verification (sent if MFA is required)
+    /// </summary>
+    public string? MFASessionToken { get; set; }
+
+    /// <summary>
+    /// Is MFA verification required
+    /// </summary>
+    public bool IsMFARequired { get; set; } = false;
 }
 
 public class UserResponse
@@ -41,6 +58,7 @@ public class UserResponse
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
+    public bool IsMFAEnabled { get; set; } = false;
 }
 
 public class CreateUserRequest

@@ -47,6 +47,21 @@ public class User
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// User's MFA Setup (if configured)
+    /// </summary>
+    public MFASetup? MFASetup { get; set; }
+
+    /// <summary>
+    /// Is MFA enabled for this user
+    /// </summary>
+    public bool IsMFAEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Is MFA required for this user (enforced by admin)
+    /// </summary>
+    public bool IsMFARequired { get; set; } = false;
+
     // Navigation properties
     public ICollection<Checklist> CreatedChecklists { get; set; } = new List<Checklist>();
     public ICollection<Checklist> AssignedAsRM { get; set; } = new List<Checklist>();
@@ -55,6 +70,10 @@ public class User
     public ICollection<UserLog> PerformedByLogs { get; set; } = new List<UserLog>();
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
     public ICollection<Deferral> CreatedDeferrals { get; set; } = new List<Deferral>();
+    public ICollection<MFALog> MFALogs { get; set; } = new List<MFALog>();
+    public ICollection<TrustedDevice> TrustedDevices { get; set; } = new List<TrustedDevice>();
+    public ICollection<SSOConnection> SSOConnections { get; set; } = new List<SSOConnection>();
+    public ICollection<SSOLog> SSOLogs { get; set; } = new List<SSOLog>();
 }
 
 public enum UserRole

@@ -5,6 +5,7 @@ using NCBA.DCL.Data;
 using NCBA.DCL.Models;
 using NCBA.DCL.Services;
 using NCBA.DCL.Helpers;
+using NCBA.DCL.DTOs;
 
 namespace NCBA.DCL.Controllers;
 
@@ -1158,23 +1159,21 @@ public class CoCreatorController : ControllerBase
 
             _logger.LogInformation($"? Assigned Co-Checker: {checklist.AssignedToCoCheckerId}");
 
+            // Reload the checklist with all includes to return updated data to client
+            var updatedChecklistWithDocs = await _context.Checklists
+                .Include(c => c.CreatedBy)
+                .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
+                .Include(c => c.Documents)
+                    .ThenInclude(dc => dc.DocList)
+                        .ThenInclude(d => d.CoCreatorFiles)
+                .Include(c => c.SupportingDocs)
+                .FirstOrDefaultAsync(c => c.Id == checklist.Id);
+
             return Ok(new
             {
                 message = "Checklist submitted to Co-Checker successfully",
-                checklist = new
-                {
-                    id = checklist.Id,
-                    dclNo = checklist.DclNo,
-                    status = checklist.Status.ToString(),
-                    assignedToCoCheckerId = checklist.AssignedToCoCheckerId,
-                    assignedToCoChecker = checklist.AssignedToCoChecker != null ? new
-                    {
-                        id = checklist.AssignedToCoChecker.Id,
-                        name = checklist.AssignedToCoChecker.Name
-                    } : null,
-                    finalComment = checklist.FinalComment,
-                    updatedAt = checklist.UpdatedAt
-                }
+                checklist = updatedChecklistWithDocs // Return full updated checklist
             });
         }
         catch (DbUpdateConcurrencyException dbEx)
@@ -1307,19 +1306,35 @@ public class CoCreatorController : ControllerBase
 
             _logger.LogInformation($"? Checklist {checklist.DclNo} submitted to RM with updated documents");
 
-            // Return only essential data to avoid serialization issues with full object graph
+            // Reload the checklist with all includes to return updated data to client
+            var updatedChecklist = await _context.Checklists
+                .Include(c => c.CreatedBy)
+                .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
+                .Include(c => c.Documents)
+                    .ThenInclude(dc => dc.DocList)
+                        .ThenInclude(d => d.CoCreatorFiles)
+                .Include(c => c.SupportingDocs)
+                .FirstOrDefaultAsync(c => c.Id == id);
+
             return Ok(new
             {
                 message = "Checklist submitted to RM successfully",
                 checklistId = id,
                 dclNo = checklist.DclNo,
-                status = checklist.Status.ToString()
+                status = checklist.Status.ToString(),
+                checklist = updatedChecklist // Return full checklist so client has current state
             });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error submitting to RM");
-            return StatusCode(500, new { message = "Internal server error", error = ex.Message });
+            return StatusCode(500, new
+            {
+                message = "Error submitting checklist to RM",
+                error = ex.GetType().Name,
+                details = ex.Message?.Replace("\r\n", " ").Replace("\n", " ").Replace("\"", "'") ?? "Unknown error"
+            });
         }
     }
 
@@ -1370,19 +1385,35 @@ public class CoCreatorController : ControllerBase
 
             await _context.SaveChangesAsync();
 
-            // Return only essential data to avoid serialization issues
+            // Reload the checklist with all includes to return updated data to client
+            var updatedChecklist = await _context.Checklists
+                .Include(c => c.CreatedBy)
+                .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
+                .Include(c => c.Documents)
+                    .ThenInclude(dc => dc.DocList)
+                        .ThenInclude(d => d.CoCreatorFiles)
+                .Include(c => c.SupportingDocs)
+                .FirstOrDefaultAsync(c => c.Id == id);
+
             return Ok(new
             {
                 message = "Checklist submitted to Co-Checker successfully",
                 checklistId = id,
                 dclNo = checklist.DclNo,
-                status = checklist.Status.ToString()
+                status = checklist.Status.ToString(),
+                checklist = updatedChecklist // Return full checklist so client has current state
             });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error submitting to co-checker");
-            return StatusCode(500, new { message = "Internal server error", error = ex.Message });
+            return StatusCode(500, new
+            {
+                message = "Error submitting checklist to Co-Checker",
+                error = ex.GetType().Name,
+                details = ex.Message?.Replace("\r\n", " ").Replace("\n", " ").Replace("\"", "'") ?? "Unknown error"
+            });
         }
     }
 
@@ -1813,30 +1844,6 @@ public class CoCreatorSubmitToCCRequest
     public bool? SubmittedToCoChecker { get; set; }
     public Guid? AssignedToCoChecker { get; set; }
     public string? FinalComment { get; set; }
-}
-
-public class SubmitToRMRequest
-{
-    public List<DocumentCategoryUpdateDto>? Documents { get; set; }
-    public string? CreatorComment { get; set; }
-}
-
-public class DocumentCategoryUpdateDto
-{
-    public string? Category { get; set; }
-    public List<DocumentUpdateInSubmitDto>? DocList { get; set; }
-}
-
-public class DocumentUpdateInSubmitDto
-{
-    public Guid? Id { get; set; }
-    public Guid? _id { get; set; }
-    public string? Name { get; set; }
-    public string? Status { get; set; }
-    public string? Comment { get; set; }
-    public string? FileUrl { get; set; }
-    public string? DeferralReason { get; set; }
-    public string? DeferralNumber { get; set; }
 }
 
 public class UpdateStatusRequest

@@ -30,6 +30,16 @@ public class ApplicationDbContext : DbContext
     public DbSet<ExtensionFile> ExtensionFiles { get; set; }
     public DbSet<SupportingDoc> SupportingDocs { get; set; }
 
+    // MFA and Security Models
+    public DbSet<MFASetup> MFASetups { get; set; }
+    public DbSet<MFALog> MFALogs { get; set; }
+    public DbSet<TrustedDevice> TrustedDevices { get; set; }
+
+    // SSO Models
+    public DbSet<SSOProvider> SSOProviders { get; set; }
+    public DbSet<SSOConnection> SSOConnections { get; set; }
+    public DbSet<SSOLog> SSOLogs { get; set; }
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -234,7 +244,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Status).HasConversion<string>();
             entity.Property(e => e.CreatorApprovalStatus).HasConversion<string>();
             entity.Property(e => e.CheckerApprovalStatus).HasConversion<string>();
-            
+
             entity.HasOne(e => e.Deferral).WithMany().HasForeignKey(e => e.DeferralId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.RequestedBy).WithMany().HasForeignKey(e => e.RequestedById).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.CreatorApprovedBy).WithMany().HasForeignKey(e => e.CreatorApprovedById).OnDelete(DeleteBehavior.SetNull);
@@ -278,6 +288,84 @@ public class ApplicationDbContext : DbContext
         {
             entity.HasKey(sd => sd.Id);
             entity.HasOne(sd => sd.Checklist).WithMany(c => c.SupportingDocs).HasForeignKey(sd => sd.ChecklistId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // MFA Setup configuration
+        modelBuilder.Entity<MFASetup>(entity =>
+        {
+            entity.HasKey(m => m.Id);
+            entity.HasOne(m => m.User)
+                .WithOne(u => u.MFASetup)
+                .HasForeignKey<MFASetup>(m => m.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(m => m.UserId).IsUnique();
+        });
+
+        // MFA Log configuration
+        modelBuilder.Entity<MFALog>(entity =>
+        {
+            entity.HasKey(ml => ml.Id);
+            entity.HasOne(ml => ml.User)
+                .WithMany(u => u.MFALogs)
+                .HasForeignKey(ml => ml.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(ml => new { ml.UserId, ml.CreatedAt });
+        });
+
+        // Trusted Device configuration
+        modelBuilder.Entity<TrustedDevice>(entity =>
+        {
+            entity.HasKey(td => td.Id);
+            entity.HasOne(td => td.User)
+                .WithMany(u => u.TrustedDevices)
+                .HasForeignKey(td => td.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(td => new { td.UserId, td.DeviceFingerprint });
+        });
+
+        // SSO Provider configuration
+        modelBuilder.Entity<SSOProvider>(entity =>
+        {
+            entity.HasKey(sp => sp.Id);
+            entity.HasIndex(sp => sp.ProviderName).IsUnique();
+            entity.HasMany(sp => sp.UserConnections)
+                .WithOne(sc => sc.Provider)
+                .HasForeignKey(sc => sc.SSOProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(sp => sp.SSOLogs)
+                .WithOne(sl => sl.Provider)
+                .HasForeignKey(sl => sl.SSOProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // SSO Connection configuration
+        modelBuilder.Entity<SSOConnection>(entity =>
+        {
+            entity.HasKey(sc => sc.Id);
+            entity.HasOne(sc => sc.User)
+                .WithMany(u => u.SSOConnections)
+                .HasForeignKey(sc => sc.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(sc => sc.Provider)
+                .WithMany(p => p.UserConnections)
+                .HasForeignKey(sc => sc.SSOProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(sc => new { sc.UserId, sc.SSOProviderId }).IsUnique();
+            entity.HasIndex(sc => new { sc.SSOProviderId, sc.ProviderUserId }).IsUnique();
+        });
+
+        // SSO Log configuration
+        modelBuilder.Entity<SSOLog>(entity =>
+        {
+            entity.HasKey(sl => sl.Id);
+            entity.HasOne(sl => sl.User)
+                .WithMany(u => u.SSOLogs)
+                .HasForeignKey(sl => sl.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(sl => sl.Provider)
+                .WithMany(p => p.SSOLogs)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(sl => new { sl.UserId, sl.CreatedAt });
         });
     }
 

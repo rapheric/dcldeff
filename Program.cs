@@ -76,6 +76,9 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IMFAService, MFAService>();
+builder.Services.AddScoped<ISSOService, SSOService>();
+builder.Services.AddHttpClient();
 
 // Configure CORS
 builder.Services.AddCors(options =>

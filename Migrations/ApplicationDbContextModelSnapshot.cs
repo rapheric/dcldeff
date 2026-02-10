@@ -700,6 +700,91 @@ namespace NCBA.DCL.Migrations
                     b.ToTable("Facilities");
                 });
 
+            modelBuilder.Entity("NCBA.DCL.Models.MFALog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DeviceFingerprint")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsSuccess")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("MFAMethod")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("longtext");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("MFALogs");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.MFASetup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("BackupCodes")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("DisabledAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EnabledAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsBackupCodesEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsTotpEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("LastTestedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("TotpSecret")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
+
+                    b.ToTable("MFASetups");
+                });
+
             modelBuilder.Entity("NCBA.DCL.Models.Notification", b =>
                 {
                     b.Property<Guid>("Id")
@@ -726,6 +811,167 @@ namespace NCBA.DCL.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Notifications");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.SSOConnection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("AccessToken")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("ProviderEmail")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProviderName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProviderProfileData")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProviderUserId")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("RefreshToken")
+                        .HasColumnType("longtext");
+
+                    b.Property<Guid>("SSOProviderId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("TokenExpiresAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SSOProviderId", "ProviderUserId")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "SSOProviderId")
+                        .IsUnique();
+
+                    b.ToTable("SSOConnections");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.SSOLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsSuccess")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Operation")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<Guid>("SSOProviderId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("longtext");
+
+                    b.Property<Guid?>("UserId")
+                        .IsRequired()
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SSOProviderId");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("SSOLogs");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.SSOProvider", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Authority")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("AuthorizationEndpoint")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ClientSecret")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("IconUrl")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("ProviderName")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("ProviderType")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("RedirectUri")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Scopes")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("TokenEndpoint")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("UserInfoEndpoint")
+                        .HasColumnType("longtext");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProviderName")
+                        .IsUnique();
+
+                    b.ToTable("SSOProviders");
                 });
 
             modelBuilder.Entity("NCBA.DCL.Models.SupportingDoc", b =>
@@ -767,6 +1013,47 @@ namespace NCBA.DCL.Migrations
                     b.HasIndex("UploadedById");
 
                     b.ToTable("SupportingDocs");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.TrustedDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DeviceFingerprint")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("DeviceName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("DeviceType")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("LastUsedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "DeviceFingerprint");
+
+                    b.ToTable("TrustedDevices");
                 });
 
             modelBuilder.Entity("NCBA.DCL.Models.Upload", b =>
@@ -851,6 +1138,12 @@ namespace NCBA.DCL.Migrations
                         .HasColumnType("varchar(255)");
 
                     b.Property<bool>("IsArchived")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsMFAEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsMFARequired")
                         .HasColumnType("tinyint(1)");
 
                     b.Property<bool>("IsOnline")
@@ -1188,12 +1481,72 @@ namespace NCBA.DCL.Migrations
                     b.Navigation("Deferral");
                 });
 
+            modelBuilder.Entity("NCBA.DCL.Models.MFALog", b =>
+                {
+                    b.HasOne("NCBA.DCL.Models.User", "User")
+                        .WithMany("MFALogs")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.MFASetup", b =>
+                {
+                    b.HasOne("NCBA.DCL.Models.User", "User")
+                        .WithOne("MFASetup")
+                        .HasForeignKey("NCBA.DCL.Models.MFASetup", "UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("NCBA.DCL.Models.Notification", b =>
                 {
                     b.HasOne("NCBA.DCL.Models.User", "User")
                         .WithMany("Notifications")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.SSOConnection", b =>
+                {
+                    b.HasOne("NCBA.DCL.Models.SSOProvider", "Provider")
+                        .WithMany("UserConnections")
+                        .HasForeignKey("SSOProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("NCBA.DCL.Models.User", "User")
+                        .WithMany("SSOConnections")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Provider");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.SSOLog", b =>
+                {
+                    b.HasOne("NCBA.DCL.Models.SSOProvider", "Provider")
+                        .WithMany("SSOLogs")
+                        .HasForeignKey("SSOProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("NCBA.DCL.Models.User", "User")
+                        .WithMany("SSOLogs")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .IsRequired();
+
+                    b.Navigation("Provider");
 
                     b.Navigation("User");
                 });
@@ -1213,6 +1566,17 @@ namespace NCBA.DCL.Migrations
                     b.Navigation("Checklist");
 
                     b.Navigation("UploadedBy");
+                });
+
+            modelBuilder.Entity("NCBA.DCL.Models.TrustedDevice", b =>
+                {
+                    b.HasOne("NCBA.DCL.Models.User", "User")
+                        .WithMany("TrustedDevices")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("NCBA.DCL.Models.UserLog", b =>
@@ -1271,6 +1635,13 @@ namespace NCBA.DCL.Migrations
                     b.Navigation("History");
                 });
 
+            modelBuilder.Entity("NCBA.DCL.Models.SSOProvider", b =>
+                {
+                    b.Navigation("SSOLogs");
+
+                    b.Navigation("UserConnections");
+                });
+
             modelBuilder.Entity("NCBA.DCL.Models.User", b =>
                 {
                     b.Navigation("AssignedAsCoChecker");
@@ -1281,11 +1652,21 @@ namespace NCBA.DCL.Migrations
 
                     b.Navigation("CreatedDeferrals");
 
+                    b.Navigation("MFALogs");
+
+                    b.Navigation("MFASetup");
+
                     b.Navigation("Notifications");
 
                     b.Navigation("PerformedByLogs");
 
+                    b.Navigation("SSOConnections");
+
+                    b.Navigation("SSOLogs");
+
                     b.Navigation("TargetUserLogs");
+
+                    b.Navigation("TrustedDevices");
                 });
 #pragma warning restore 612, 618
         }

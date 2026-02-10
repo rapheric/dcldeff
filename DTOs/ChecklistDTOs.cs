@@ -166,7 +166,46 @@ public class SupportingDocDto
 public class SubmitToRMRequest
 {
     [JsonPropertyName("documents")]
-    public List<DocumentCategoryDto>? Documents { get; set; }
+    public List<DocumentCategoryUpdateDto>? Documents { get; set; }
+
+    [JsonPropertyName("creatorComment")]
+    public string? CreatorComment { get; set; }
+}
+
+public class DocumentCategoryUpdateDto
+{
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+
+    [JsonPropertyName("docList")]
+    public List<DocumentUpdateInSubmitDto>? DocList { get; set; }
+}
+
+public class DocumentUpdateInSubmitDto
+{
+    [JsonPropertyName("id")]
+    public Guid? Id { get; set; }
+
+    [JsonPropertyName("_id")]
+    public Guid? _id { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("comment")]
+    public string? Comment { get; set; }
+
+    [JsonPropertyName("fileUrl")]
+    public string? FileUrl { get; set; }
+
+    [JsonPropertyName("deferralReason")]
+    public string? DeferralReason { get; set; }
+
+    [JsonPropertyName("deferralNumber")]
+    public string? DeferralNumber { get; set; }
 }
 
 public class RmDocumentUpdateDto
