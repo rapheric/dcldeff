@@ -313,7 +313,8 @@ public class CoCreatorController : ControllerBase
 
                     foreach (var docDto in catDto.DocList ?? new List<DocumentCreateDto>())
                     {
-                        // Parse status string to DocumentStatus enum, default to PendingRM if parsing fails
+
+                        // Parse status string to DocumentStatus enum, only default to PendingRM if truly missing
                         DocumentStatus docStatus = DocumentStatus.PendingRM;
                         if (!string.IsNullOrEmpty(docDto.Status) && Enum.TryParse<DocumentStatus>(docDto.Status, ignoreCase: true, out var parsedStatus))
                         {
@@ -514,6 +515,7 @@ public class CoCreatorController : ControllerBase
                     .ThenInclude(dc => dc.DocList)
                         .ThenInclude(d => d.CoCreatorFiles)
                 .Include(c => c.SupportingDocs)
+                    .ThenInclude(sd => sd.UploadedBy)
                 .Include(c => c.Logs)
                     .ThenInclude(l => l.User)
                 .FirstOrDefaultAsync(c => c.Id == id);
@@ -815,6 +817,7 @@ public class CoCreatorController : ControllerBase
                             id = d.Id,
                             name = d.Name,
                             status = d.Status.ToString().ToLower(),
+                            creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
                             rmStatus = d.RmStatus.ToString().ToLower(),
                             fileUrl = d.FileUrl,
                             comment = d.Comment,
@@ -1006,7 +1009,27 @@ public class CoCreatorController : ControllerBase
                         var existingDoc = existingDocsMap[docId.Value];
 
                         existingDoc.Name = docFromRequest.Name ?? existingDoc.Name;
-                        existingDoc.Status = TryParseDocumentStatus(docFromRequest.Status?.ToString() ?? existingDoc.Status.ToString()) ?? existingDoc.Status;
+
+                        // Only update status if provided, otherwise preserve last actioned status
+                        if (docFromRequest.Status != null)
+                        {
+                            var parsedStatus = TryParseDocumentStatus(docFromRequest.Status?.ToString());
+                            if (parsedStatus.HasValue)
+                                existingDoc.Status = parsedStatus.Value;
+                        }
+                        // Preserve CreatorStatus (coStatus)
+                        if (docFromRequest.CreatorStatus != null)
+                        {
+                            // Accept lowercase string and map to enum
+                            if (Enum.TryParse<CreatorStatus>(docFromRequest.CreatorStatus.ToString(), true, out var parsedCreatorStatus))
+                                existingDoc.CreatorStatus = parsedCreatorStatus;
+                        }
+                        else if (docFromRequest.Status != null)
+                        {
+                            // Map DocumentStatus to CreatorStatus if possible
+                            existingDoc.CreatorStatus = MapDocumentStatusToCreatorStatus(existingDoc.Status);
+                        }
+
                         existingDoc.Comment = docFromRequest.Comment ?? existingDoc.Comment;
                         existingDoc.FileUrl = docFromRequest.FileUrl ?? existingDoc.FileUrl;
                         existingDoc.DeferralReason = docFromRequest.DeferralReason ?? existingDoc.DeferralReason;
@@ -1159,21 +1182,63 @@ public class CoCreatorController : ControllerBase
 
             _logger.LogInformation($"? Assigned Co-Checker: {checklist.AssignedToCoCheckerId}");
 
-            // Reload the checklist with all includes to return updated data to client
-            var updatedChecklistWithDocs = await _context.Checklists
-                .Include(c => c.CreatedBy)
-                .Include(c => c.AssignedToRM)
-                .Include(c => c.AssignedToCoChecker)
+            // Reload checklist with all related data for response
+            var updatedChecklist = await _context.Checklists
                 .Include(c => c.Documents)
                     .ThenInclude(dc => dc.DocList)
-                        .ThenInclude(d => d.CoCreatorFiles)
                 .Include(c => c.SupportingDocs)
+                    .ThenInclude(sd => sd.UploadedBy)
+                .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
+                .Include(c => c.CreatedBy)
                 .FirstOrDefaultAsync(c => c.Id == checklist.Id);
 
+            // Return flat response to avoid circular references
             return Ok(new
             {
                 message = "Checklist submitted to Co-Checker successfully",
-                checklist = updatedChecklistWithDocs // Return full updated checklist
+                checklist = new
+                {
+                    id = updatedChecklist.Id,
+                    dclNo = updatedChecklist.DclNo,
+                    status = updatedChecklist.Status.ToString(),
+                    assignedToCoCheckerId = updatedChecklist.AssignedToCoCheckerId,
+                    assignedToCoChecker = updatedChecklist.AssignedToCoChecker != null ? new
+                    {
+                        id = updatedChecklist.AssignedToCoChecker.Id,
+                        name = updatedChecklist.AssignedToCoChecker.Name
+                    } : null,
+                    documents = updatedChecklist.Documents.Select(dc => new
+                    {
+                        id = dc.Id,
+                        category = dc.Category,
+                        docList = dc.DocList.Select(d => new
+                        {
+                            id = d.Id,
+                            name = d.Name,
+                            status = d.Status.ToString().ToLower(),
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                            rmStatus = d.RmStatus.ToString().ToLower(),
+                            fileUrl = d.FileUrl,
+                            comment = d.Comment,
+                            deferralNumber = d.DeferralNumber,
+                            deferralNo = d.DeferralNumber
+                        }).ToList()
+                    }).ToList(),
+                    supportingDocs = updatedChecklist.SupportingDocs.Select(sd => new
+                    {
+                        id = sd.Id,
+                        fileName = sd.FileName,
+                        fileUrl = sd.FileUrl,
+                        fileSize = sd.FileSize,
+                        fileType = sd.FileType,
+                        uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : null,
+                        uploadedById = sd.UploadedById,
+                        uploadedByRole = sd.UploadedByRole,
+                        uploadedAt = sd.UploadedAt
+                    }).ToList(),
+                    updatedAt = updatedChecklist.UpdatedAt
+                }
             });
         }
         catch (DbUpdateConcurrencyException dbEx)
@@ -1313,17 +1378,28 @@ public class CoCreatorController : ControllerBase
                 .Include(c => c.AssignedToCoChecker)
                 .Include(c => c.Documents)
                     .ThenInclude(dc => dc.DocList)
-                        .ThenInclude(d => d.CoCreatorFiles)
                 .Include(c => c.SupportingDocs)
                 .FirstOrDefaultAsync(c => c.Id == id);
+
+            if (updatedChecklist == null)
+            {
+                return NotFound(new { message = "Checklist not found after update" });
+            }
 
             return Ok(new
             {
                 message = "Checklist submitted to RM successfully",
                 checklistId = id,
-                dclNo = checklist.DclNo,
-                status = checklist.Status.ToString(),
-                checklist = updatedChecklist // Return full checklist so client has current state
+                dclNo = updatedChecklist.DclNo,
+                status = updatedChecklist.Status.ToString(),
+                assignedToRM = updatedChecklist.AssignedToRM != null ? new
+                {
+                    id = updatedChecklist.AssignedToRM.Id,
+                    name = updatedChecklist.AssignedToRM.Name,
+                    email = updatedChecklist.AssignedToRM.Email
+                } : null,
+                documentsCount = updatedChecklist.Documents?.Count ?? 0,
+                updatedAt = updatedChecklist.UpdatedAt
             });
         }
         catch (Exception ex)
@@ -1392,17 +1468,28 @@ public class CoCreatorController : ControllerBase
                 .Include(c => c.AssignedToCoChecker)
                 .Include(c => c.Documents)
                     .ThenInclude(dc => dc.DocList)
-                        .ThenInclude(d => d.CoCreatorFiles)
                 .Include(c => c.SupportingDocs)
                 .FirstOrDefaultAsync(c => c.Id == id);
+
+            if (updatedChecklist == null)
+            {
+                return NotFound(new { message = "Checklist not found after update" });
+            }
 
             return Ok(new
             {
                 message = "Checklist submitted to Co-Checker successfully",
                 checklistId = id,
-                dclNo = checklist.DclNo,
-                status = checklist.Status.ToString(),
-                checklist = updatedChecklist // Return full checklist so client has current state
+                dclNo = updatedChecklist.DclNo,
+                status = updatedChecklist.Status.ToString(),
+                assignedToCoChecker = updatedChecklist.AssignedToCoChecker != null ? new
+                {
+                    id = updatedChecklist.AssignedToCoChecker.Id,
+                    name = updatedChecklist.AssignedToCoChecker.Name,
+                    email = updatedChecklist.AssignedToCoChecker.Email
+                } : null,
+                documentsCount = updatedChecklist.Documents?.Count ?? 0,
+                updatedAt = updatedChecklist.UpdatedAt
             });
         }
         catch (Exception ex)
@@ -1655,34 +1742,70 @@ public class CoCreatorController : ControllerBase
                 return BadRequest(new { message = "No files provided" });
             }
 
-            var checklist = await _context.Checklists.FindAsync(id);
+            var checklist = await _context.Checklists
+                .Include(c => c.SupportingDocs)
+                .FirstOrDefaultAsync(c => c.Id == id);
+
             if (checklist == null)
             {
                 return NotFound(new { message = "Checklist not found" });
             }
 
+            // Get current user info
+            var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+            var userName = User.FindFirst("name")?.Value ?? "Unknown User";
+            var userRole = User.FindFirst("role")?.Value ?? "co_creator";
+
             var uploadsPath = Path.Combine(_environment.ContentRootPath, "uploads", id.ToString());
-            var uploadedFiles = new List<object>();
+            var uploadedDocs = new List<object>();
 
             foreach (var file in files)
             {
                 var fileName = await FileUploadHelper.SaveFileAsync(file, uploadsPath);
-                uploadedFiles.Add(new
+                var fileUrl = $"/uploads/{id}/{fileName}";
+
+                // Create SupportingDoc entity in the database
+                var supportingDoc = new SupportingDoc
                 {
-                    name = file.FileName,
-                    url = $"/uploads/{id}/{fileName}"
+                    Id = Guid.NewGuid(),
+                    FileName = file.FileName,
+                    FileUrl = fileUrl,
+                    FileSize = file.Length,
+                    FileType = file.ContentType,
+                    UploadedById = userId,
+                    UploadedByRole = userRole,
+                    UploadedAt = DateTime.UtcNow,
+                    ChecklistId = id
+                };
+
+                _context.SupportingDocs.Add(supportingDoc);
+                checklist.SupportingDocs.Add(supportingDoc);
+
+                uploadedDocs.Add(new
+                {
+                    id = supportingDoc.Id,
+                    fileName = supportingDoc.FileName,
+                    fileUrl = supportingDoc.FileUrl,
+                    fileSize = supportingDoc.FileSize,
+                    fileType = supportingDoc.FileType,
+                    uploadedBy = userName,
+                    uploadedById = userId,
+                    uploadedByRole = userRole,
+                    uploadedAt = supportingDoc.UploadedAt
                 });
             }
 
+            await _context.SaveChangesAsync();
+
             return Ok(new
             {
-                message = "Files uploaded successfully",
-                files = uploadedFiles
+                message = "Supporting documents uploaded successfully",
+                supportingDocs = uploadedDocs
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error uploading files");
+            _logger.LogError(ex, "Error uploading supporting documents");
             return StatusCode(500, new { message = "Internal server error" });
         }
     }

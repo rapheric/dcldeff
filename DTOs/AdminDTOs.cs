@@ -25,12 +25,12 @@ namespace NCBA.DCL.DTOs
 
     public class TransferRoleDto
     {
-        public string NewRole { get; set; }
+        public string NewRole { get; set; } = string.Empty;
     }
 
     public class ReassignTasksDto
     {
-        public string ToUserId { get; set; }
+        public string ToUserId { get; set; } = string.Empty;
     }
 
     public class IdResponseDto

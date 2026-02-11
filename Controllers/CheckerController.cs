@@ -78,6 +78,19 @@ public class CheckerController : ControllerBase
         {
             _logger.LogInformation($"🔍 Fetching my queue for checker: {checkerId}");
 
+            // DEBUG: Check all checklists in the system
+            var allChecklists = await _context.Checklists.CountAsync();
+            var coCheckerReviewCount = await _context.Checklists
+                .Where(c => c.Status == ChecklistStatus.CoCheckerReview)
+                .CountAsync();
+            _logger.LogInformation($"📊 DEBUG: Total checklists: {allChecklists}, CoCheckerReview status: {coCheckerReviewCount}");
+
+            // DEBUG: Check checklists assigned to this specific checker
+            var assignedToThisChecker = await _context.Checklists
+                .Where(c => c.AssignedToCoCheckerId == checkerId)
+                .CountAsync();
+            _logger.LogInformation($"📊 DEBUG: Checklists assigned to checker {checkerId}: {assignedToThisChecker}");
+
             var myQueue = await _context.Checklists
                 .Where(c => c.AssignedToCoCheckerId == checkerId &&
                            c.Status == ChecklistStatus.CoCheckerReview)
@@ -104,7 +117,24 @@ public class CheckerController : ControllerBase
                     createdBy = c.CreatedBy != null ? new { id = c.CreatedBy.Id, name = c.CreatedBy.Name } : null,
                     assignedToRM = c.AssignedToRM != null ? new { id = c.AssignedToRM.Id, name = c.AssignedToRM.Name } : null,
                     assignedToCoChecker = c.AssignedToCoChecker != null ? new { id = c.AssignedToCoChecker.Id, name = c.AssignedToCoChecker.Name } : null,
-                    documents = c.Documents,
+                    documents = c.Documents.Select(dc => new
+                    {
+                        id = dc.Id,
+                        category = dc.Category,
+                        docList = dc.DocList.Select(d => new
+                        {
+                            id = d.Id,
+                            name = d.Name,
+                            status = d.Status.ToString().ToLower(),
+                            coStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                            rmStatus = d.RmStatus.ToString().ToLower(),
+                            fileUrl = d.FileUrl,
+                            comment = d.Comment,
+                            deferralNumber = d.DeferralNumber,
+                            deferralNo = d.DeferralNumber
+                        }).ToList()
+                    }).ToList(),
                     supportingDocs = c.SupportingDocs.Select(sd => new
                     {
                         id = sd.Id,
@@ -121,7 +151,7 @@ public class CheckerController : ControllerBase
                 })
                 .ToListAsync();
 
-            _logger.LogInformation($"📊 Found {myQueue.Count} items in queue");
+            _logger.LogInformation($"📊 Found {myQueue.Count} items in queue for checker {checkerId}");
             return Ok(myQueue);
         }
         catch (Exception ex)
@@ -145,8 +175,11 @@ public class CheckerController : ControllerBase
                            c.Status == ChecklistStatus.Approved)
                 .Include(c => c.CreatedBy)
                 .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
                 .Include(c => c.Documents)
                     .ThenInclude(dc => dc.DocList)
+                .Include(c => c.SupportingDocs)
+                    .ThenInclude(sd => sd.UploadedBy)
                 .OrderByDescending(c => c.UpdatedAt)
                 .Select(c => new
                 {
@@ -159,6 +192,37 @@ public class CheckerController : ControllerBase
                     status = c.Status.ToString(),
                     createdBy = c.CreatedBy != null ? new { id = c.CreatedBy.Id, name = c.CreatedBy.Name } : null,
                     assignedToRM = c.AssignedToRM != null ? new { id = c.AssignedToRM.Id, name = c.AssignedToRM.Name } : null,
+                    assignedToCoChecker = c.AssignedToCoChecker != null ? new { id = c.AssignedToCoChecker.Id, name = c.AssignedToCoChecker.Name } : null,
+                    documents = c.Documents.Select(dc => new
+                    {
+                        id = dc.Id,
+                        category = dc.Category,
+                        docList = dc.DocList.Select(d => new
+                        {
+                            id = d.Id,
+                            name = d.Name,
+                            status = d.Status.ToString().ToLower(),
+                            creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                            rmStatus = d.RmStatus.ToString().ToLower(),
+                            fileUrl = d.FileUrl,
+                            comment = d.Comment,
+                            deferralNumber = d.DeferralNumber,
+                            deferralNo = d.DeferralNumber,
+                            expiryDate = d.ExpiryDate
+                        }).ToList()
+                    }).ToList(),
+                    supportingDocs = c.SupportingDocs.Select(sd => new
+                    {
+                        id = sd.Id,
+                        _id = sd.Id,
+                        fileName = sd.FileName,
+                        fileUrl = sd.FileUrl,
+                        fileSize = sd.FileSize,
+                        fileType = sd.FileType,
+                        uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : "Unknown",
+                        uploadedAt = sd.UploadedAt
+                    }).ToList(),
                     createdAt = c.CreatedAt,
                     updatedAt = c.UpdatedAt
                 })
@@ -191,6 +255,7 @@ public class CheckerController : ControllerBase
                     .ThenInclude(dc => dc.DocList)
                         .ThenInclude(d => d.CoCreatorFiles)
                 .Include(c => c.SupportingDocs)
+                    .ThenInclude(sd => sd.UploadedBy)
                 .Include(c => c.Logs)
                     .ThenInclude(l => l.User)
                 .FirstOrDefaultAsync(c => c.Id == id);
@@ -202,7 +267,69 @@ public class CheckerController : ControllerBase
             }
 
             _logger.LogInformation($"✅ DCL found: {dcl.DclNo}");
-            return Ok(dcl);
+
+            // ✅ Properly map to DTO to avoid serialization errors
+            var response = new
+            {
+                id = dcl.Id,
+                _id = dcl.Id,
+                dclNo = dcl.DclNo,
+                customerNumber = dcl.CustomerNumber,
+                customerName = dcl.CustomerName,
+                loanType = dcl.LoanType,
+                ibpsNo = dcl.IbpsNo,
+                status = dcl.Status.ToString(),
+                createdBy = dcl.CreatedBy != null ? new { id = dcl.CreatedBy.Id, name = dcl.CreatedBy.Name } : null,
+                assignedToRM = dcl.AssignedToRM != null ? new { id = dcl.AssignedToRM.Id, name = dcl.AssignedToRM.Name } : null,
+                assignedToCoChecker = dcl.AssignedToCoChecker != null ? new { id = dcl.AssignedToCoChecker.Id, name = dcl.AssignedToCoChecker.Name } : null,
+                documents = dcl.Documents.Select(dc => new
+                {
+                    id = dc.Id,
+                    category = dc.Category,
+                    docList = dc.DocList.Select(d => new
+                    {
+                        id = d.Id,
+                        name = d.Name,
+                        status = d.Status.ToString().ToLower(),
+                        coStatus = d.CreatorStatus?.ToString().ToLower(),
+                        checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                        rmStatus = d.RmStatus.ToString().ToLower(),
+                        fileUrl = d.FileUrl,
+                        comment = d.Comment,
+                        checkerComment = d.CheckerComment,
+                        deferralNumber = d.DeferralNumber,
+                        deferralNo = d.DeferralNumber,
+                        coCreatorFiles = d.CoCreatorFiles.Select(cf => new
+                        {
+                            id = cf.Id,
+                            name = cf.Name,
+                            url = cf.Url
+                        }).ToList()
+                    }).ToList()
+                }).ToList(),
+                supportingDocs = dcl.SupportingDocs.Select(sd => new
+                {
+                    id = sd.Id,
+                    _id = sd.Id,
+                    fileName = sd.FileName,
+                    fileUrl = sd.FileUrl,
+                    fileSize = sd.FileSize,
+                    fileType = sd.FileType,
+                    uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : "Unknown",
+                    uploadedAt = sd.UploadedAt
+                }).ToList(),
+                logs = dcl.Logs.Select(l => new
+                {
+                    id = l.Id,
+                    message = l.Message,
+                    user = l.User != null ? new { id = l.User.Id, name = l.User.Name } : null,
+                    timestamp = l.Timestamp
+                }).ToList(),
+                createdAt = dcl.CreatedAt,
+                updatedAt = dcl.UpdatedAt
+            };
+
+            return Ok(response);
         }
         catch (Exception ex)
         {
@@ -428,7 +555,7 @@ public class CheckerController : ControllerBase
                 foreach (var doc in category.DocList)
                 {
                     var docIdStr = doc.Id.ToString();
-                    CheckerStatus finalCheckerStatus;
+                    CheckerStatus finalCheckerStatus = doc.CheckerStatus;
 
                     if (updatesMap.ContainsKey(docIdStr))
                     {
@@ -449,11 +576,8 @@ public class CheckerController : ControllerBase
                         // If rejecting entire checklist, all become rejected
                         finalCheckerStatus = CheckerStatus.Rejected;
                     }
-                    else
-                    {
-                        // Keep existing status if returning to co_creator_review
-                        finalCheckerStatus = doc.CheckerStatus;
-                    }
+                    // else if returning to co_creator_review, preserve last checker status (do not reset to pending)
+                    // Do nothing: keep doc.CheckerStatus as is
 
                     doc.CheckerStatus = finalCheckerStatus;
                     doc.UpdatedAt = DateTime.UtcNow; // Ensure document update timestamp is set
@@ -578,15 +702,36 @@ public class CheckerController : ControllerBase
                 .Include(c => c.SupportingDocs)
                 .FirstOrDefaultAsync(c => c.Id == checklist.Id);
 
-            return Ok(new
+            // ✅ Properly map the response to avoid circular references
+            var response = new
             {
                 message = $"Checklist successfully updated to {newStatus}",
                 checklistId = checklist.Id,
                 dclNo = checklist.DclNo,
                 status = newStatus.ToString(),
                 updatedAt = DateTime.UtcNow,
-                checklist = updatedChecklist // Include full checklist for verification
-            });
+                checklist = updatedChecklist != null ? new
+                {
+                    id = updatedChecklist.Id,
+                    dclNo = updatedChecklist.DclNo,
+                    status = updatedChecklist.Status.ToString(),
+                    documents = updatedChecklist.Documents.Select(dc => new
+                    {
+                        id = dc.Id,
+                        category = dc.Category,
+                        docList = dc.DocList.Select(d => new
+                        {
+                            id = d.Id,
+                            name = d.Name,
+                            status = d.Status.ToString().ToLower(),
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                            checkerComment = d.CheckerComment
+                        }).ToList()
+                    }).ToList()
+                } : null
+            };
+
+            return Ok(response);
         }
         catch (Exception ex)
         {

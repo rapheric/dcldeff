@@ -5,7 +5,7 @@ namespace NCBA.DCL.DTOs
 {
     public class AuditLogCreateDto
     {
-        public string Action { get; set; }
+        public string Action { get; set; } = string.Empty;
         public string? Resource { get; set; }
         public string? ResourceId { get; set; }
         public string? Status { get; set; }
