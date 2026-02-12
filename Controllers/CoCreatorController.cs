@@ -138,12 +138,17 @@ public class CoCreatorController : ControllerBase
                         if (docUpdate.Status.HasValue) doc.Status = docUpdate.Status.Value;
                         if (docUpdate.DeferralReason != null) doc.DeferralReason = docUpdate.DeferralReason;
                         if (docUpdate.DeferralNumber != null) doc.DeferralNumber = docUpdate.DeferralNumber;
+                        
+                        // Explicitly mark as modified to ensure persistence
+                        _context.Entry(doc).State = EntityState.Modified;
                     }
                 }
             }
             if (request.Status.HasValue) checklist.Status = request.Status.Value;
+            
             if (!string.IsNullOrEmpty(request.GeneralComment))
             {
+                checklist.GeneralComment = request.GeneralComment;
                 checklist.Logs.Add(new ChecklistLog
                 {
                     Id = Guid.NewGuid(),
@@ -411,6 +416,8 @@ public class CoCreatorController : ControllerBase
                             id = d.Id,
                             name = d.Name,
                             status = d.Status.ToString().ToLower(),
+                            creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
                             rmStatus = d.RmStatus.ToString().ToLower(),
                             fileUrl = d.FileUrl,
                             comment = d.Comment,
@@ -537,6 +544,7 @@ public class CoCreatorController : ControllerBase
                 loanType = checklist.LoanType,
                 ibpsNo = checklist.IbpsNo,
                 status = checklist.Status.ToString(),
+                generalComment = checklist.GeneralComment,
                 assignedToRMId = checklist.AssignedToRMId,
                 createdBy = checklist.CreatedBy != null ? new { id = checklist.CreatedBy.Id, name = checklist.CreatedBy.Name } : null,
                 assignedToRM = checklist.AssignedToRM != null ? new { id = checklist.AssignedToRM.Id, name = checklist.AssignedToRM.Name } : null,
@@ -550,6 +558,7 @@ public class CoCreatorController : ControllerBase
                         id = d.Id,
                         name = d.Name,
                         status = d.Status.ToString().ToLower(),
+                        creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
                         rmStatus = d.RmStatus.ToString().ToLower(),
                         fileUrl = d.FileUrl,
                         comment = d.Comment,
@@ -641,6 +650,8 @@ public class CoCreatorController : ControllerBase
                         id = d.Id,
                         name = d.Name,
                         status = d.Status.ToString().ToLower(),
+                        creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
+                        checkerStatus = d.CheckerStatus.ToString().ToLower(),
                         rmStatus = d.RmStatus.ToString().ToLower(),
                         fileUrl = d.FileUrl,
                         comment = d.Comment,
@@ -708,39 +719,98 @@ public class CoCreatorController : ControllerBase
     {
         try
         {
+            _logger.LogInformation($"📝 Fetching comments for checklist: {checklistId}");
+            
             var logs = await _context.ChecklistLogs
                 .Where(l => l.ChecklistId == checklistId)
                 .Include(l => l.User)
-                .OrderByDescending(l => l.Timestamp)
-                .Select(l => new
-                {
-                    _id = l.Id,
-                    id = l.Id,
-                    message = l.Message,
-                    userId = l.User != null ? new
-                    {
-                        id = l.User.Id,
-                        name = l.User.Name,
-                        role = l.User.Role.ToString() // Include role as string representation
-                    } : null,
-                    user = l.User != null ? new
-                    {
-                        id = l.User.Id,
-                        name = l.User.Name,
-                        role = l.User.Role.ToString()
-                    } : null,
-                    createdAt = l.Timestamp,
-                    timestamp = l.Timestamp
-                })
+                .OrderBy(l => l.Timestamp) // Chronological order: oldest to newest
                 .ToListAsync();
+            
+            _logger.LogInformation($"   Found {logs.Count} comment logs");
 
-            return Ok(logs);
+            var result = logs.Select(l => 
+            {
+                try
+                {
+                    return new
+                    {
+                        _id = l.Id,
+                        id = l.Id,
+                        message = l.Message,
+                        userId = l.User != null ? new
+                        {
+                            id = l.User.Id,
+                            name = l.User.Name,
+                            email = l.User.Email,
+                            role = l.User.Role.ToString()
+                        } : null,
+                        user = l.User != null ? new
+                        {
+                            id = l.User.Id,
+                            name = l.User.Name,
+                            email = l.User.Email,
+                            role = l.User.Role.ToString()
+                        } : null,
+                        roleInfo = l.User != null ? new
+                        {
+                            role = l.User.Role.ToString(),
+                            color = GetRoleColor(l.User.Role),
+                            badge = GetRoleBadge(l.User.Role)
+                        } : null,
+                        createdAt = l.Timestamp,
+                        timestamp = l.Timestamp
+                    };
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, $"❌ Error mapping log entry {l.Id}: {logEx.Message}");
+                    throw;
+                }
+            }).ToList();
+            
+            _logger.LogInformation($"✅ Successfully mapped {result.Count} comments");
+            return Ok(result);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error fetching comments");
-            return StatusCode(500, new { message = "Internal server error" });
+            _logger.LogError(ex, $"❌ CRITICAL ERROR fetching comments for {checklistId}: {ex.GetType().Name} - {ex.Message}");
+            if (ex.InnerException != null)
+            {
+                _logger.LogError(ex.InnerException, $"   Inner Exception: {ex.InnerException.Message}");
+            }
+            return StatusCode(500, new { 
+                message = "Internal server error", 
+                error = ex.Message,
+                type = ex.GetType().Name
+            });
         }
+    }
+
+    // Helper method to get role color for UI display
+    private string GetRoleColor(UserRole role)
+    {
+        return role switch
+        {
+            UserRole.CoCreator => "#3B82F6", // Blue
+            UserRole.RM => "#8B5CF6", // Purple
+            UserRole.CoChecker => "#10B981", // Green
+            UserRole.Admin => "#EF4444", // Red
+            _ => "#6B7280" // Gray
+        };
+    }
+
+    // Helper method to get role badge text
+    private string GetRoleBadge(UserRole role)
+    {
+        return role switch
+        {
+            UserRole.CoCreator => "CREATOR",
+            UserRole.RM => "RM",
+            UserRole.CoChecker => "CHECKER",
+            UserRole.Admin => "ADMIN",
+            _ => role.ToString().ToUpper()
+        };
     }
 
     // GET /api/cocreatorChecklist/search/customer
@@ -958,6 +1028,21 @@ public class CoCreatorController : ControllerBase
     {
         try
         {
+            _logger.LogInformation($"🟢 SUBMIT TO CHECKER - Received payload:");
+            _logger.LogInformation($"   DclNo: {request.DclNo}");
+            _logger.LogInformation($"   Documents count: {request.Documents?.Count}");
+            
+            // Log each document's status info
+            if (request.Documents != null)
+            {
+                foreach (var doc in request.Documents)
+                {
+                    _logger.LogInformation($"   📄 Doc: {doc.Name}");
+                    _logger.LogInformation($"      Status: {doc.Status}");
+                    _logger.LogInformation($"      CreatorStatus (from request): {doc.CreatorStatus}");
+                }
+            }
+            
             if (string.IsNullOrWhiteSpace(request.DclNo))
             {
                 return BadRequest(new { error = "DCL No is required" });
@@ -1007,27 +1092,51 @@ public class CoCreatorController : ControllerBase
                     {
                         // UPDATE EXISTING DOCUMENT IN PLACE
                         var existingDoc = existingDocsMap[docId.Value];
+                        
+                        _logger.LogInformation($"🔧 UPDATING: {existingDoc.Name} (ID: {docId});");
+                        _logger.LogInformation($"   Old CreatorStatus: {existingDoc.CreatorStatus}");
+                        _logger.LogInformation($"   Old Status: {existingDoc.Status}");
 
                         existingDoc.Name = docFromRequest.Name ?? existingDoc.Name;
 
                         // Only update status if provided, otherwise preserve last actioned status
+                        DocumentStatus? newStatus = null;
                         if (docFromRequest.Status != null)
                         {
                             var parsedStatus = TryParseDocumentStatus(docFromRequest.Status?.ToString());
                             if (parsedStatus.HasValue)
+                            {
                                 existingDoc.Status = parsedStatus.Value;
+                                newStatus = parsedStatus.Value; // Track the NEW status for CreatorStatus mapping
+                                _logger.LogInformation($"   New Status: {existingDoc.Status}");
+                            }
                         }
-                        // Preserve CreatorStatus (coStatus)
+                        
+                        // Preserve/Set CreatorStatus (coStatus) - CRITICAL FOR PERSISTENCE
                         if (docFromRequest.CreatorStatus != null)
                         {
                             // Accept lowercase string and map to enum
                             if (Enum.TryParse<CreatorStatus>(docFromRequest.CreatorStatus.ToString(), true, out var parsedCreatorStatus))
+                            {
                                 existingDoc.CreatorStatus = parsedCreatorStatus;
+                                _logger.LogInformation($"   ✅ Set CreatorStatus from request: {existingDoc.CreatorStatus}");
+                            }
                         }
-                        else if (docFromRequest.Status != null)
+                        else if (newStatus.HasValue)
                         {
-                            // Map DocumentStatus to CreatorStatus if possible
+                            // Map the NEW DocumentStatus to CreatorStatus (not the old value!)
+                            existingDoc.CreatorStatus = MapDocumentStatusToCreatorStatus(newStatus.Value);
+                            _logger.LogInformation($"   ✅ Mapped CreatorStatus from Status: {existingDoc.CreatorStatus}");
+                        }
+                        else if (!existingDoc.CreatorStatus.HasValue && existingDoc.Status != DocumentStatus.Pending && existingDoc.Status != DocumentStatus.PendingRM)
+                        {
+                            // Initialize CreatorStatus based on current Status if not yet set
                             existingDoc.CreatorStatus = MapDocumentStatusToCreatorStatus(existingDoc.Status);
+                            _logger.LogInformation($"   ✅ Initialized CreatorStatus: {existingDoc.CreatorStatus}");
+                        }
+                        else
+                        {
+                            _logger.LogInformation($"   ⚠️ CreatorStatus not modified: {existingDoc.CreatorStatus}");
                         }
 
                         existingDoc.Comment = docFromRequest.Comment ?? existingDoc.Comment;
@@ -1042,8 +1151,8 @@ public class CoCreatorController : ControllerBase
 
                         existingDoc.UpdatedAt = DateTime.UtcNow;
 
-                        // Mark for update
-                        _context.Documents.Update(existingDoc);
+                        // Explicitly mark the entity as modified to ensure EF Core tracks the change
+                        _context.Entry(existingDoc).State = EntityState.Modified;
                     }
                 }
             }
@@ -1094,14 +1203,24 @@ public class CoCreatorController : ControllerBase
             {
                 foreach (var doc in category.DocList)
                 {
+                    bool docModified = false;
+                    
                     if (doc.CheckerStatus == CheckerStatus.Pending || !Enum.IsDefined(typeof(CheckerStatus), doc.CheckerStatus))
                     {
                         doc.CheckerStatus = CheckerStatus.Pending;
+                        docModified = true;
                     }
                     // Ensure deferralNumber is preserved
                     if (doc.Status == DocumentStatus.Deferred && string.IsNullOrWhiteSpace(doc.DeferralNumber))
                     {
                         doc.DeferralNumber = doc.DeferralNumber ?? null;
+                        docModified = true;
+                    }
+                    
+                    // Mark as modified if we changed anything
+                    if (docModified)
+                    {
+                        _context.Entry(doc).State = EntityState.Modified;
                     }
                 }
             }
@@ -1109,10 +1228,13 @@ public class CoCreatorController : ControllerBase
             /* ============================================================
                COMMENTS / ATTACHMENTS / AUDIT
             ============================================================ */
-            checklist.FinalComment = request.FinalComment ?? "";
+            checklist.FinalComment = request.FinalComment ?? checklist.FinalComment;
+            checklist.GeneralComment = request.FinalComment ?? checklist.GeneralComment; // Store general comment for visibility
             checklist.UpdatedAt = DateTime.UtcNow;
 
+            _logger.LogInformation($"💾 SaveChangesAsync called...");
             await _context.SaveChangesAsync();
+            _logger.LogInformation($"✅ SaveChangesAsync completed successfully!");
 
             /* ============================================================
                LOG AUDIT
@@ -1217,6 +1339,7 @@ public class CoCreatorController : ControllerBase
                             id = d.Id,
                             name = d.Name,
                             status = d.Status.ToString().ToLower(),
+                            creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
                             checkerStatus = d.CheckerStatus.ToString().ToLower(),
                             rmStatus = d.RmStatus.ToString().ToLower(),
                             fileUrl = d.FileUrl,
@@ -1277,6 +1400,21 @@ public class CoCreatorController : ControllerBase
         return null;
     }
 
+    private CreatorStatus? MapDocumentStatusToCreatorStatus(DocumentStatus? status)
+    {
+        return status switch
+        {
+            DocumentStatus.Submitted => CreatorStatus.Submitted,
+            DocumentStatus.PendingRM => CreatorStatus.PendingRM,
+            DocumentStatus.PendingCo => CreatorStatus.PendingCo,
+            DocumentStatus.Deferred => CreatorStatus.Deferred,
+            DocumentStatus.TBO => CreatorStatus.TBO,
+            DocumentStatus.Waived => CreatorStatus.Waived,
+            DocumentStatus.Sighted => CreatorStatus.Sighted,
+            _ => null
+        };
+    }
+
     // POST /api/cocreatorChecklist/:id/submit-to-rm
     [HttpPost("{id}/submit-to-rm")]
 
@@ -1323,6 +1461,18 @@ public class CoCreatorController : ControllerBase
                         if (!string.IsNullOrEmpty(docUpdate.Status) && Enum.TryParse<DocumentStatus>(docUpdate.Status, ignoreCase: true, out var status))
                             doc.Status = status;
 
+                        // Preserve CreatorStatus (coStatus)
+                        if (!string.IsNullOrEmpty(docUpdate.CreatorStatus))
+                        {
+                            if (Enum.TryParse<CreatorStatus>(docUpdate.CreatorStatus, ignoreCase: true, out var creatorStatus))
+                                doc.CreatorStatus = creatorStatus;
+                        }
+                        else if (!doc.CreatorStatus.HasValue && doc.Status != DocumentStatus.Pending && doc.Status != DocumentStatus.PendingRM)
+                        {
+                            // Initialize CreatorStatus from DocumentStatus if not set and status is meaningful
+                            doc.CreatorStatus = MapDocumentStatusToCreatorStatus(doc.Status);
+                        }
+
                         if (!string.IsNullOrEmpty(docUpdate.FileUrl))
                             doc.FileUrl = docUpdate.FileUrl;
 
@@ -1333,14 +1483,37 @@ public class CoCreatorController : ControllerBase
                             doc.DeferralReason = docUpdate.DeferralReason;
 
                         doc.UpdatedAt = DateTime.UtcNow;
+                        
+                        // Explicitly mark the entity as modified to ensure EF Core tracks the change
+                        _context.Entry(doc).State = EntityState.Modified;
 
-                        _logger.LogInformation($"  ? Updated doc: Status={doc.Status}, Comment={doc.Comment}");
+                        _logger.LogInformation($"  ? Updated doc: Status={doc.Status}, CreatorStatus={doc.CreatorStatus}, Comment={doc.Comment}");
                     }
                 }
             }
 
             checklist.Status = ChecklistStatus.RMReview;
             checklist.UpdatedAt = DateTime.UtcNow;
+            
+            // Store creator comment for visibility across modals
+            if (!string.IsNullOrWhiteSpace(request?.CreatorComment))
+            {
+                checklist.GeneralComment = request.CreatorComment;
+            }
+
+            // Store creator comment if provided
+            if (!string.IsNullOrEmpty(request?.CreatorComment))
+            {
+                checklist.GeneralComment = request.CreatorComment;
+                checklist.Logs.Add(new ChecklistLog
+                {
+                    Id = Guid.NewGuid(),
+                    Message = $"Creator comment: {request.CreatorComment}",
+                    UserId = userId,
+                    ChecklistId = id,
+                    Timestamp = DateTime.UtcNow
+                });
+            }
 
             var log = new ChecklistLog
             {
@@ -1898,6 +2071,7 @@ public class DocumentDto
     public string? Name { get; set; }
     public string? Category { get; set; }
     public DocumentStatus? Status { get; set; }
+    public CreatorStatus? CreatorStatus { get; set; }
     public string? Comment { get; set; }
     public string? FileUrl { get; set; }
     public string? DeferralReason { get; set; }

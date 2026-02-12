@@ -50,6 +50,7 @@ public class Checklist
     // Navigation properties
     public string? IbpsNo { get; set; }
     public string? Remarks { get; set; }
+    public string? GeneralComment { get; set; }
     public string? CheckerComment { get; set; }
     public string? FinalComment { get; set; }
     public bool SubmittedToCoChecker { get; set; } = false;

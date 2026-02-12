@@ -229,6 +229,10 @@ public class RMController : ControllerBase
 
                     // Mark document as modified by setting UpdatedAt
                     doc.UpdatedAt = DateTime.UtcNow;
+                    
+                    // Explicitly mark the entity as modified to ensure EF Core tracks the change
+                    _context.Entry(doc).State = EntityState.Modified;
+                    
                     _logger.LogInformation($"✅ Document '{doc.Name}' in category '{updatedDoc.Category}' updated successfully");
                 }
 

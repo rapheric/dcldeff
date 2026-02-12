@@ -195,6 +195,9 @@ public class DocumentUpdateInSubmitDto
     [JsonPropertyName("status")]
     public string? Status { get; set; }
 
+    [JsonPropertyName("creatorStatus")]
+    public string? CreatorStatus { get; set; }
+
     [JsonPropertyName("comment")]
     public string? Comment { get; set; }
 
@@ -256,6 +259,9 @@ public class CoCreatorSubmitToCCRequest
     [JsonPropertyName("dclNo")]
     public string DclNo { get; set; } = string.Empty;
 
+    [JsonPropertyName("status")]
+    public string? Status { get; set; } // Frontend sends checklist status like "co_checker_review"
+
     [JsonPropertyName("documents")]
     public List<CoCreatorDocumentDto>? Documents { get; set; }
 
@@ -270,6 +276,9 @@ public class CoCreatorSubmitToCCRequest
 
     [JsonPropertyName("attachments")]
     public List<string>? Attachments { get; set; }
+
+    [JsonPropertyName("supportingDocs")]
+    public List<SupportingDocUpdateDto>? SupportingDocs { get; set; } // Frontend sends supportingDocs array
 }
 
 public class CoCreatorDocumentDto
@@ -289,6 +298,12 @@ public class CoCreatorDocumentDto
     [JsonPropertyName("status")]
     public string? Status { get; set; }
 
+    [JsonPropertyName("creatorStatus")]
+    public string? CreatorStatus { get; set; }
+
+    [JsonPropertyName("checkerStatus")]
+    public string? CheckerStatus { get; set; } // Frontend sends checker status from loaded data
+
     [JsonPropertyName("comment")]
     public string? Comment { get; set; }
 
@@ -303,4 +318,22 @@ public class CoCreatorDocumentDto
 
     [JsonPropertyName("expiryDate")]
     public DateTime? ExpiryDate { get; set; }
+}
+
+public class SupportingDocUpdateDto
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("fileName")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("fileUrl")]
+    public string? FileUrl { get; set; }
+
+    [JsonPropertyName("fileSize")]
+    public long? FileSize { get; set; }
+
+    [JsonPropertyName("fileType")]
+    public string? FileType { get; set; }
 }

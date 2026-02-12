@@ -13,7 +13,7 @@ namespace NCBA.DCL.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
     [Migration("20260209071204_k")]
-    partial class k
+    partial class K
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

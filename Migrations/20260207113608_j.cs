@@ -5,7 +5,7 @@
 namespace NCBA.DCL.Migrations
 {
     /// <inheritdoc />
-    public partial class j : Migration
+    public partial class J : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)

@@ -29,6 +29,7 @@ public class DocumentDto
     public string? FileUrl { get; set; }
     public string? Comment { get; set; }
     public DocumentStatus? Status { get; set; }
+    public CreatorStatus? CreatorStatus { get; set; }
     public string? DeferralReason { get; set; }
     public string? DeferralNumber { get; set; }
 
