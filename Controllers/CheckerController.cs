@@ -372,7 +372,7 @@ public class CheckerController : ControllerBase
                         {
                             if (docUpdate.Status.HasValue) doc.CheckerStatus = docUpdate.Status.Value;
                             if (!string.IsNullOrEmpty(docUpdate.CheckerComment)) doc.CheckerComment = docUpdate.CheckerComment;
-                            
+
                             // Explicitly mark the entity as modified to ensure EF Core tracks the change
                             _context.Entry(doc).State = EntityState.Modified;
                         }
@@ -387,7 +387,7 @@ public class CheckerController : ControllerBase
                     foreach (var doc in category.DocList)
                     {
                         doc.CheckerStatus = request.Status == ChecklistStatus.Approved ? CheckerStatus.Approved : CheckerStatus.Rejected;
-                        
+
                         // Explicitly mark the entity as modified to ensure EF Core tracks the change
                         _context.Entry(doc).State = EntityState.Modified;
                     }
@@ -513,11 +513,11 @@ public class CheckerController : ControllerBase
         try
         {
             var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
-            
+
             _logger.LogInformation($"🔴 CHECKER RETURNING TO CO-CREATOR");
             _logger.LogInformation($"   Action: {request.Action}");
             _logger.LogInformation($"   CheckerDecisions count: {request.CheckerDecisions?.Count}");
-            
+
             if (request.CheckerDecisions != null)
             {
                 foreach (var decision in request.CheckerDecisions)
@@ -526,7 +526,7 @@ public class CheckerController : ControllerBase
                     _logger.LogInformation($"      CheckerStatus (incoming): {decision.CheckerStatus}");
                 }
             }
-            
+
             _logger.LogInformation($"RTK Query: Sending payload to updateCheckerStatus: {System.Text.Json.JsonSerializer.Serialize(request)}");
 
             if (!request.Id.HasValue)
@@ -575,11 +575,11 @@ public class CheckerController : ControllerBase
                 foreach (var doc in category.DocList)
                 {
                     var docIdStr = doc.Id.ToString();
-                    
+
                     _logger.LogInformation($"🔧 Processing doc: {doc.Name} (ID: {docIdStr})");
                     _logger.LogInformation($"   Old CheckerStatus: {doc.CheckerStatus}");
                     _logger.LogInformation($"   Old CreatorStatus: {doc.CreatorStatus}");
-                    
+
                     CheckerStatus finalCheckerStatus = doc.CheckerStatus;
 
                     if (updatesMap.ContainsKey(docIdStr))
@@ -619,7 +619,7 @@ public class CheckerController : ControllerBase
 
                     doc.CheckerStatus = finalCheckerStatus;
                     doc.UpdatedAt = DateTime.UtcNow; // Ensure document update timestamp is set
-                    
+
                     // Explicitly mark the entity as modified to ensure EF Core tracks the change
                     _context.Entry(doc).State = EntityState.Modified;
                 }
@@ -741,7 +741,7 @@ public class CheckerController : ControllerBase
             }
 
             await _context.SaveChangesAsync();
-            
+
             _logger.LogInformation($"✅ SaveChangesAsync completed - Reloading checklist...");
 
             // Reload the checklist with all includes to return updated data

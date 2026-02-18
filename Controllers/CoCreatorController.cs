@@ -138,32 +138,38 @@ public class CoCreatorController : ControllerBase
                         if (docUpdate.Status.HasValue) doc.Status = docUpdate.Status.Value;
                         if (docUpdate.DeferralReason != null) doc.DeferralReason = docUpdate.DeferralReason;
                         if (docUpdate.DeferralNumber != null) doc.DeferralNumber = docUpdate.DeferralNumber;
-                        
+
                         // Explicitly mark as modified to ensure persistence
                         _context.Entry(doc).State = EntityState.Modified;
                     }
                 }
             }
             if (request.Status.HasValue) checklist.Status = request.Status.Value;
-            
+
             if (!string.IsNullOrEmpty(request.GeneralComment))
             {
                 checklist.GeneralComment = request.GeneralComment;
-                checklist.Logs.Add(new ChecklistLog
+                var commentLog = new ChecklistLog
                 {
                     Id = Guid.NewGuid(),
-                    Message = $"Co-Creator comment: {request.GeneralComment}",
+                    Message = request.GeneralComment,  // NO PREFIX - store raw message
                     UserId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty),
+                    ChecklistId = id,
                     Timestamp = DateTime.UtcNow
-                });
+                };
+                _context.ChecklistLogs.Add(commentLog);
+                _logger.LogInformation($"✅ Co-Creator comment saved: ChecklistId={id}, Message length={request.GeneralComment.Length}");
             }
-            checklist.Logs.Add(new ChecklistLog
+
+            var updateLog = new ChecklistLog
             {
                 Id = Guid.NewGuid(),
                 Message = "Checklist updated by Co-Creator",
                 UserId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty),
+                ChecklistId = id,
                 Timestamp = DateTime.UtcNow
-            });
+            };
+            _context.ChecklistLogs.Add(updateLog);
             checklist.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
             return Ok(new { message = "Checklist updated successfully", checklist });
@@ -251,8 +257,24 @@ public class CoCreatorController : ControllerBase
             };
             _context.Checklists.Add(revived);
             await _context.SaveChangesAsync();
-            // TODO: Audit log (implement as needed)
-            return StatusCode(201, new { message = $"Checklist revived as {newDclNo}", checklist = revived });
+
+            _logger.LogInformation($"✅ Checklist revived successfully. Original: {original.DclNo} ({original.Id}), New: {newDclNo} ({revived.Id})");
+
+            // Return response with newChecklistId for clarity
+            return StatusCode(201, new
+            {
+                message = $"Checklist revived as {newDclNo}",
+                newChecklistId = revived.Id,
+                checklist = new
+                {
+                    id = revived.Id,
+                    _id = revived.Id,
+                    dclNo = revived.DclNo,
+                    status = revived.Status.ToString(),
+                    createdAt = revived.CreatedAt,
+                    updatedAt = revived.UpdatedAt
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -727,7 +749,7 @@ public class CoCreatorController : ControllerBase
         try
         {
             _logger.LogInformation($"📝 Fetching comments for checklist: {checklistId}");
-            
+
             // Validate checklistId first
             if (checklistId == Guid.Empty)
             {
@@ -748,45 +770,67 @@ public class CoCreatorController : ControllerBase
                 .Include(l => l.User)
                 .OrderBy(l => l.Timestamp) // Chronological order: oldest to newest
                 .ToListAsync();
-            
+
             _logger.LogInformation($"   Found {logs.Count} comment logs for checklist {checklistId}");
+
+            // 🔍 DEBUG: Log what we fetched from database
+            for (int i = 0; i < logs.Count; i++)
+            {
+                var roleText = logs[i].User?.Role.ToString() ?? "NO_USER";
+                var messagePreview = logs[i].Message?.Substring(0, Math.Min(40, logs[i].Message.Length)) ?? "[NULL]";
+                _logger.LogInformation($"   DB[{i}] Role: {roleText} | User: {logs[i].User?.Name ?? "NULL"} | Message: '{messagePreview}'");
+            }
 
             // Map logs to response format
             var result = new List<dynamic>();
-            
+
             foreach (var l in logs)
             {
                 try
                 {
+                    // 🔧 CRITICAL FIX: Handle NULL User relationships with fallbacks
+                    var userRole = l.User?.Role ?? UserRole.CoCreator;  // Default to CoCreator if user null
+                    var hasValidUser = l.User != null;
+
                     var commentData = new
                     {
                         _id = l.Id,
                         id = l.Id,
                         message = l.Message ?? "",
-                        userId = l.User != null ? new
+                        userId = new
                         {
-                            id = l.User.Id,
-                            name = l.User.Name ?? "Unknown",
-                            email = l.User.Email ?? "",
-                            role = l.User.Role.ToString()
-                        } : null,
-                        user = l.User != null ? new
+                            id = hasValidUser ? l.User.Id : l.UserId,
+                            name = hasValidUser ? (l.User.Name ?? "Unknown") : "Unknown User",
+                            email = hasValidUser ? (l.User.Email ?? "") : "",
+                            role = userRole.ToString(),
+                            _warning = hasValidUser ? null : "User lookup failed - using UserId fallback"
+                        },
+                        user = new
                         {
-                            id = l.User.Id,
-                            name = l.User.Name ?? "Unknown",
-                            email = l.User.Email ?? "",
-                            role = l.User.Role.ToString()
-                        } : null,
-                        roleInfo = l.User != null ? new
+                            id = hasValidUser ? l.User.Id : l.UserId,
+                            name = hasValidUser ? (l.User.Name ?? "Unknown") : "Unknown User",
+                            email = hasValidUser ? (l.User.Email ?? "") : "",
+                            role = userRole.ToString(),
+                            _warning = hasValidUser ? null : "User lookup failed - using UserId fallback"
+                        },
+                        roleInfo = new
                         {
-                            role = l.User.Role.ToString(),
-                            color = GetRoleColor(l.User.Role),
-                            badge = GetRoleBadge(l.User.Role)
-                        } : null,
+                            role = userRole.ToString(),
+                            color = GetRoleColor(userRole),
+                            badge = GetRoleBadge(userRole),
+                            _warning = hasValidUser ? null : "User lookup failed - using default role"
+                        },
                         createdAt = l.Timestamp,
-                        timestamp = l.Timestamp
+                        timestamp = l.Timestamp,
+                        _debug = hasValidUser ? null : $"NULL User detected - UserId: {l.UserId}, Message length: {l.Message?.Length ?? 0}"
                     };
                     result.Add(commentData);
+
+                    // Log if user load failed
+                    if (!hasValidUser)
+                    {
+                        _logger.LogWarning($"⚠️  Log entry {l.Id} has NULL User - UserId: {l.UserId}. Message: '{l.Message?.Substring(0, Math.Min(50, l.Message?.Length ?? 0))}'");
+                    }
                 }
                 catch (Exception logEx)
                 {
@@ -797,17 +841,18 @@ public class CoCreatorController : ControllerBase
                         _id = l.Id,
                         id = l.Id,
                         message = $"[Error loading comment: {logEx.Message}]",
-                        userId = (object)null,
-                        user = (object)null,
-                        roleInfo = (object)null,
+                        userId = new { id = l.UserId, name = "Error", email = "", role = "Unknown" },
+                        user = new { id = l.UserId, name = "Error", email = "", role = "Unknown" },
+                        roleInfo = new { role = "Unknown", color = "#999", badge = "ERROR" },
                         createdAt = l.Timestamp,
                         timestamp = l.Timestamp,
                         error = logEx.Message
                     });
                 }
             }
-            
+
             _logger.LogInformation($"✅ Successfully mapped {result.Count} comments for checklist {checklistId}");
+
             return Ok(result);
         }
         catch (Exception ex)
@@ -817,8 +862,9 @@ public class CoCreatorController : ControllerBase
             {
                 _logger.LogError(ex.InnerException, $"   Inner Exception: {ex.InnerException.GetType().Name} - {ex.InnerException.Message}");
             }
-            return StatusCode(500, new { 
-                message = "Internal server error fetching comments", 
+            return StatusCode(500, new
+            {
+                message = "Internal server error fetching comments",
                 error = ex.Message,
                 type = ex.GetType().Name,
                 checklistId = checklistId.ToString()
@@ -1072,7 +1118,7 @@ public class CoCreatorController : ControllerBase
             _logger.LogInformation($"🟢 SUBMIT TO CHECKER - Received payload:");
             _logger.LogInformation($"   DclNo: {request.DclNo}");
             _logger.LogInformation($"   Documents count: {request.Documents?.Count}");
-            
+
             // Log each document's status info
             if (request.Documents != null)
             {
@@ -1083,7 +1129,7 @@ public class CoCreatorController : ControllerBase
                     _logger.LogInformation($"      CreatorStatus (from request): {doc.CreatorStatus}");
                 }
             }
-            
+
             if (string.IsNullOrWhiteSpace(request.DclNo))
             {
                 return BadRequest(new { error = "DCL No is required" });
@@ -1145,7 +1191,7 @@ public class CoCreatorController : ControllerBase
                     {
                         // UPDATE EXISTING DOCUMENT IN PLACE
                         var existingDoc = existingDocsMap[docId.Value];
-                        
+
                         _logger.LogInformation($"🔧 UPDATING: {existingDoc.Name} (ID: {docId})");
                         _logger.LogInformation($"   Old CreatorStatus: {existingDoc.CreatorStatus}");
                         _logger.LogInformation($"   Old Status: {existingDoc.Status}");
@@ -1164,7 +1210,7 @@ public class CoCreatorController : ControllerBase
                                 _logger.LogInformation($"   New Status: {existingDoc.Status}");
                             }
                         }
-                        
+
                         // CRITICAL: Set CreatorStatus from request or derive from Status
                         if (docFromRequest.CreatorStatus != null)
                         {
@@ -1209,7 +1255,7 @@ public class CoCreatorController : ControllerBase
                 _logger.LogWarning($"⚠️  NO DOCUMENTS IN SUBMISSION REQUEST!");
                 _logger.LogWarning($"   Existing documents in checklist: {checklist.Documents.Sum(cat => cat.DocList.Count)}");
                 _logger.LogWarning($"   These documents will be PRESERVED but their statuses might not update");
-                
+
                 // Safety: Mark all documents as viewed by creator if they don't have CreatorStatus
                 foreach (var category in checklist.Documents)
                 {
@@ -1278,7 +1324,7 @@ public class CoCreatorController : ControllerBase
                 foreach (var doc in category.DocList)
                 {
                     bool docModified = false;
-                    
+
                     if (doc.CheckerStatus == CheckerStatus.Pending || !Enum.IsDefined(typeof(CheckerStatus), doc.CheckerStatus))
                     {
                         doc.CheckerStatus = CheckerStatus.Pending;
@@ -1290,7 +1336,7 @@ public class CoCreatorController : ControllerBase
                         doc.DeferralNumber = doc.DeferralNumber ?? null;
                         docModified = true;
                     }
-                    
+
                     // Mark as modified if we changed anything
                     if (docModified)
                     {
@@ -1348,8 +1394,30 @@ public class CoCreatorController : ControllerBase
             }
 
             /* ============================================================
-               ADD LOG ENTRY
+               ADD LOG ENTRY & COMMENTS
             ============================================================ */
+
+            // 🔧 CRITICAL: Add comment FIRST if provided, then add workflow log
+            _logger.LogInformation($"🔍 CHECK: request.FinalComment = '{request.FinalComment}' | IsNullOrWhiteSpace = {string.IsNullOrWhiteSpace(request.FinalComment)}");
+
+            if (!string.IsNullOrWhiteSpace(request.FinalComment))
+            {
+                var commentLog = new ChecklistLog
+                {
+                    Id = Guid.NewGuid(),
+                    Message = request.FinalComment,  // NO PREFIX - store raw message
+                    UserId = userId,
+                    ChecklistId = checklist.Id,
+                    Timestamp = DateTime.UtcNow
+                };
+                _context.ChecklistLogs.Add(commentLog);
+                _logger.LogInformation($"✅ Co-Creator comment added to DB: ChecklistId={checklist.Id}, UserId={userId}, Message='{request.FinalComment}'");
+            }
+            else
+            {
+                _logger.LogWarning($"⚠️  No Co-Creator comment provided - FinalComment is null/empty");
+            }
+
             var log = new ChecklistLog
             {
                 Id = Guid.NewGuid(),
@@ -1360,21 +1428,8 @@ public class CoCreatorController : ControllerBase
             };
             _context.ChecklistLogs.Add(log);
 
-            // If CoCreator provided a comment, add it as a separate log entry
-            if (!string.IsNullOrWhiteSpace(request.FinalComment))
-            {
-                var commentLog = new ChecklistLog
-                {
-                    Id = Guid.NewGuid(),
-                    Message = $"CoCreator Comment: {request.FinalComment}",
-                    UserId = userId,
-                    ChecklistId = checklist.Id,
-                    Timestamp = DateTime.UtcNow
-                };
-                _context.ChecklistLogs.Add(commentLog);
-            }
-
             await _context.SaveChangesAsync();
+            _logger.LogInformation($"✅ SaveChangesAsync completed: Both comment and workflow log saved");
 
             _logger.LogInformation($"? Assigned Co-Checker: {checklist.AssignedToCoCheckerId}");
 
@@ -1568,7 +1623,7 @@ public class CoCreatorController : ControllerBase
                             doc.DeferralReason = docUpdate.DeferralReason;
 
                         doc.UpdatedAt = DateTime.UtcNow;
-                        
+
                         // Explicitly mark the entity as modified to ensure EF Core tracks the change
                         _context.Entry(doc).State = EntityState.Modified;
 
@@ -1579,7 +1634,7 @@ public class CoCreatorController : ControllerBase
 
             checklist.Status = ChecklistStatus.RMReview;
             checklist.UpdatedAt = DateTime.UtcNow;
-            
+
             // Store creator comment for visibility across modals
             if (!string.IsNullOrWhiteSpace(request?.CreatorComment))
             {
@@ -1590,14 +1645,16 @@ public class CoCreatorController : ControllerBase
             if (!string.IsNullOrEmpty(request?.CreatorComment))
             {
                 checklist.GeneralComment = request.CreatorComment;
-                checklist.Logs.Add(new ChecklistLog
+                var commentLog = new ChecklistLog
                 {
                     Id = Guid.NewGuid(),
-                    Message = $"Creator comment: {request.CreatorComment}",
+                    Message = request.CreatorComment, // Store raw message without "Creator comment:" prefix
                     UserId = userId,
                     ChecklistId = id,
                     Timestamp = DateTime.UtcNow
-                });
+                };
+                _context.ChecklistLogs.Add(commentLog);
+                _logger.LogInformation($"✅ Co-Creator comment added to RM submission: {request.CreatorComment}");
             }
 
             var log = new ChecklistLog

@@ -229,10 +229,10 @@ public class RMController : ControllerBase
 
                     // Mark document as modified by setting UpdatedAt
                     doc.UpdatedAt = DateTime.UtcNow;
-                    
+
                     // Explicitly mark the entity as modified to ensure EF Core tracks the change
                     _context.Entry(doc).State = EntityState.Modified;
-                    
+
                     _logger.LogInformation($"✅ Document '{doc.Name}' in category '{updatedDoc.Category}' updated successfully");
                 }
 
@@ -247,7 +247,7 @@ public class RMController : ControllerBase
                 var commentLog = new ChecklistLog
                 {
                     Id = Guid.NewGuid(),
-                    Message = $"RM Comment: {request.RmGeneralComment}",
+                    Message = request.RmGeneralComment, // Store just the comment text without prefix
                     UserId = userId,
                     ChecklistId = request.ChecklistId.Value,
                     Timestamp = DateTime.UtcNow
