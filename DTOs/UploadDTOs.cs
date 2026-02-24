@@ -49,6 +49,9 @@ namespace NCBA.DCL.DTOs
         [JsonPropertyName("documentName")]
         public string? DocumentName { get; set; }
 
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
         [JsonPropertyName("category")]
         public string? Category { get; set; }
 

@@ -268,6 +268,9 @@ public class CheckerController : ControllerBase
 
             _logger.LogInformation($"✅ DCL found: {dcl.DclNo}");
 
+            // Fetch supporting documents from both Uploads and SupportingDocs tables
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(id, dcl);
+
             // ✅ Properly map to DTO to avoid serialization errors
             var response = new
             {
@@ -307,17 +310,7 @@ public class CheckerController : ControllerBase
                         }).ToList()
                     }).ToList()
                 }).ToList(),
-                supportingDocs = dcl.SupportingDocs.Select(sd => new
-                {
-                    id = sd.Id,
-                    _id = sd.Id,
-                    fileName = sd.FileName,
-                    fileUrl = sd.FileUrl,
-                    fileSize = sd.FileSize,
-                    fileType = sd.FileType,
-                    uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : "Unknown",
-                    uploadedAt = sd.UploadedAt
-                }).ToList(),
+                supportingDocs = supportingDocs,  // Use combined results from both tables
                 logs = dcl.Logs.Select(l => new
                 {
                     id = l.Id,
@@ -944,5 +937,74 @@ public class CheckerController : ControllerBase
             _logger.LogError(ex, "Error rejecting DCL");
             return StatusCode(500, new { message = "Internal server error" });
         }
+    }
+
+    // Helper method to combine supporting docs from both legacy SupportingDocs table and Uploads table
+    private async Task<List<object>> CombineSupportingDocsWithUploadsAsync(Guid checklistId, Checklist checklist)
+    {
+        var combinedDocs = new List<object>();
+
+        // Fetch supporting documents from Uploads table
+        var uploads = await _context.Uploads
+            .Where(u => u.ChecklistId == checklistId && u.Category == "Supporting Documents")
+            .ToListAsync();
+
+        _logger.LogInformation($"📎 Checker Controller - Found {uploads.Count} supporting documents from Uploads table for checklist {checklistId}");
+
+        // Add legacy SupportingDocs
+        combinedDocs.AddRange(checklist.SupportingDocs.Select(sd => new
+        {
+            id = sd.Id,
+            _id = sd.Id,
+            name = sd.FileName,
+            fileName = sd.FileName,
+            fileUrl = sd.FileUrl,
+            fileSize = sd.FileSize,
+            fileType = sd.FileType,
+            category = "Supporting Documents",
+            uploadedBy = sd.UploadedBy != null ? new { id = sd.UploadedBy.Id, name = sd.UploadedBy.Name } : null,
+            uploadedByRole = sd.UploadedByRole,
+            uploadedAt = sd.UploadedAt,
+            uploadData = new
+            {
+                fileName = sd.FileName,
+                fileUrl = sd.FileUrl,
+                fileSize = sd.FileSize,
+                fileType = sd.FileType,
+                uploadedBy = sd.UploadedBy?.Name ?? "Unknown",
+                uploadedByRole = sd.UploadedByRole,
+                createdAt = sd.UploadedAt
+            }
+        }));
+
+        // Add uploads from Uploads table
+        combinedDocs.AddRange(uploads.Select(u => new
+        {
+            id = u.Id,
+            _id = u.Id,
+            name = u.DocumentName ?? u.FileName,
+            fileName = u.FileName,
+            fileUrl = u.FileUrl,
+            fileSize = u.FileSize,
+            fileType = u.FileType,
+            category = "Supporting Documents",
+            uploadedBy = new { id = (Guid?)null, name = u.UploadedBy ?? "RM" },
+            uploadedByRole = u.UploadedByRole,
+            uploadedAt = u.CreatedAt,
+            uploadData = new
+            {
+                fileName = u.FileName,
+                fileUrl = u.FileUrl,
+                fileSize = u.FileSize,
+                fileType = u.FileType,
+                uploadedBy = u.UploadedBy ?? "RM",
+                uploadedByRole = u.UploadedByRole,
+                createdAt = u.CreatedAt
+            }
+        }));
+
+        _logger.LogInformation($"📎 Checker Controller - Total supporting docs to return: {combinedDocs.Count}");
+
+        return combinedDocs;
     }
 }

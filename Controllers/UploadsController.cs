@@ -40,6 +40,13 @@ public class UploadsController : ControllerBase
             var documentName = dto.DocumentName ?? dto.File.FileName;
             var category = dto.Category;
 
+            _logger.LogInformation($"📤 Upload request received:");
+            _logger.LogInformation($"   - ChecklistId (raw): '{checklistIdStr}'");
+            _logger.LogInformation($"   - DocumentId (raw): '{documentIdStr}'");
+            _logger.LogInformation($"   - DocumentName: '{documentName}'");
+            _logger.LogInformation($"   - Category: '{category}'");
+            _logger.LogInformation($"   - FileName: '{dto.File.FileName}'");
+
             // Read file as binary
             byte[] fileData;
             using (var stream = new MemoryStream())
@@ -51,11 +58,18 @@ public class UploadsController : ControllerBase
             // Get user's role from claims
             var role = User?.FindFirst("role")?.Value ?? User?.FindFirst("http://schemas.microsoft.com/ws/2008/06/identity/claims/role")?.Value ?? "RM";
 
+            var parsedChecklistId = Guid.TryParse(checklistIdStr, out var cId) ? cId : (Guid?)null;
+            var parsedDocumentId = Guid.TryParse(documentIdStr, out var dId) ? dId : (Guid?)null;
+
+            _logger.LogInformation($"📤 Parsed IDs:");
+            _logger.LogInformation($"   - ChecklistId (parsed): {parsedChecklistId?.ToString() ?? "NULL"}");
+            _logger.LogInformation($"   - DocumentId (parsed): {parsedDocumentId?.ToString() ?? "NULL"}");
+
             var upload = new Upload
             {
                 Id = Guid.NewGuid(),
-                ChecklistId = Guid.TryParse(checklistIdStr, out var cId) ? cId : (Guid?)null,
-                DocumentId = Guid.TryParse(documentIdStr, out var dId) ? dId : (Guid?)null,
+                ChecklistId = parsedChecklistId,
+                DocumentId = parsedDocumentId,
                 DocumentName = documentName,
                 Category = category,
                 FileName = dto.File.FileName,
@@ -74,6 +88,10 @@ public class UploadsController : ControllerBase
             _context.Uploads.Add(upload);
             await _context.SaveChangesAsync();
 
+            _logger.LogInformation($"✅ Upload saved to database:");
+            _logger.LogInformation($"   - Upload ID: {upload.Id}");
+            _logger.LogInformation($"   - ChecklistId in DB: {upload.ChecklistId?.ToString() ?? "NULL"}");
+
             // Set the fileUrl with the actual upload ID
             upload.FileUrl = $"/api/uploads/{upload.Id}";
             _context.Uploads.Update(upload);
@@ -86,6 +104,7 @@ public class UploadsController : ControllerBase
                 ChecklistId = upload.ChecklistId,
                 DocumentId = upload.DocumentId,
                 DocumentName = upload.DocumentName,
+                Name = upload.DocumentName ?? upload.FileName, // NEW: Add Name field for frontend compatibility
                 Category = upload.Category,
                 FileName = upload.FileName,
                 FileUrl = upload.FileUrl,
@@ -97,6 +116,8 @@ public class UploadsController : ControllerBase
                 CreatedAt = upload.CreatedAt,
                 UpdatedAt = upload.UpdatedAt
             };
+
+            _logger.LogInformation($"✅ File uploaded successfully: {upload.FileName} (ID: {upload.Id})");
 
             return StatusCode(201, new { success = true, data = response });
         }
@@ -132,6 +153,8 @@ public class UploadsController : ControllerBase
     [HttpGet("checklist/{checklistId}")]
     public async Task<IActionResult> GetByChecklist(Guid checklistId)
     {
+        _logger.LogInformation($"🔍 GetByChecklist called with checklistId: {checklistId}");
+
         // Fetch from Upload table
         var uploads = await _context.Uploads
             .Where(u => u.ChecklistId == checklistId)
@@ -142,6 +165,22 @@ public class UploadsController : ControllerBase
             .Where(s => s.ChecklistId == checklistId)
             .ToListAsync();
 
+        _logger.LogInformation($"📋 Fetching supporting docs for checklist {checklistId}:");
+        _logger.LogInformation($"   - Uploads table: {uploads.Count} records");
+        _logger.LogInformation($"   - SupportingDocs table: {supportingDocs.Count} records");
+
+        // Log each upload for debugging
+        foreach (var upload in uploads)
+        {
+            _logger.LogInformation($"   Upload: Id={upload.Id}, FileName={upload.FileName}, DocumentName={upload.DocumentName}, ChecklistId={upload.ChecklistId}");
+        }
+
+        // Log each supporting doc for debugging
+        foreach (var doc in supportingDocs)
+        {
+            _logger.LogInformation($"   SupportingDoc: Id={doc.Id}, FileName={doc.FileName}, ChecklistId={doc.ChecklistId}");
+        }
+
         // Map Upload table to response DTOs
         var uploadResponses = uploads.Select(u => new UploadResponseDto
         {
@@ -149,6 +188,7 @@ public class UploadsController : ControllerBase
             ChecklistId = u.ChecklistId,
             DocumentId = u.DocumentId,
             DocumentName = u.DocumentName,
+            Name = u.DocumentName ?? u.FileName,
             Category = u.Category,
             FileName = u.FileName,
             FileUrl = u.FileUrl,
@@ -166,6 +206,9 @@ public class UploadsController : ControllerBase
         {
             Id = s.Id,
             ChecklistId = s.ChecklistId,
+            DocumentName = s.FileName,
+            Name = s.FileName,
+            Category = "Supporting Documents",
             FileName = s.FileName,
             FileUrl = s.FileUrl,
             FileSize = s.FileSize,
@@ -176,6 +219,11 @@ public class UploadsController : ControllerBase
             CreatedAt = s.UploadedAt,
             UpdatedAt = s.UploadedAt
         }).ToList();
+
+        _logger.LogInformation($"✅ Returning {uploadResponses.Count + supportingResponses.Count} total documents");
+
+        // Log the final response data structure
+        _logger.LogInformation($"📤 Response structure: success=true, data=array[{uploadResponses.Count + supportingResponses.Count}]");
 
         // Combine both sources
         var allDocs = uploadResponses.Concat(supportingResponses).ToList();

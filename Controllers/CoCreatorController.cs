@@ -561,6 +561,8 @@ public class CoCreatorController : ControllerBase
 
             _logger.LogInformation($"? Found checklist: {checklist.DclNo}, IBPS: {checklist.IbpsNo}, RM: {checklist.AssignedToRM?.Name}, Docs: {checklist.Documents.Count}");
 
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(checklist.Id, checklist);
+
             return Ok(new
             {
                 id = checklist.Id,
@@ -598,17 +600,7 @@ public class CoCreatorController : ControllerBase
                         }).ToList()
                     }).ToList()
                 }).ToList(),
-                supportingDocs = checklist.SupportingDocs.Select(sd => new
-                {
-                    id = sd.Id,
-                    name = sd.FileName,
-                    fileUrl = sd.FileUrl,
-                    fileSize = sd.FileSize,
-                    fileType = sd.FileType,
-                    uploadedBy = sd.UploadedBy != null ? new { id = sd.UploadedBy.Id, name = sd.UploadedBy.Name } : null,
-                    uploadedByRole = sd.UploadedByRole,
-                    uploadedAt = sd.UploadedAt
-                }).ToList(),
+                supportingDocs = supportingDocs,
                 logs = checklist.Logs.Select(l => new
                 {
                     id = l.Id,
@@ -654,6 +646,8 @@ public class CoCreatorController : ControllerBase
 
             _logger.LogInformation($"? Found checklist: {checklist.DclNo}, IBPS: {checklist.IbpsNo}, RM: {checklist.AssignedToRM?.Name}, Docs: {checklist.Documents.Count}");
 
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(checklist.Id, checklist);
+
             return Ok(new
             {
                 id = checklist.Id,
@@ -685,17 +679,7 @@ public class CoCreatorController : ControllerBase
                         deferralNumber = d.DeferralNumber
                     }).ToList()
                 }).ToList(),
-                supportingDocs = checklist.SupportingDocs.Select(sd => new
-                {
-                    id = sd.Id,
-                    name = sd.FileName,
-                    fileUrl = sd.FileUrl,
-                    fileSize = sd.FileSize,
-                    fileType = sd.FileType,
-                    uploadedBy = sd.UploadedBy != null ? new { id = sd.UploadedBy.Id, name = sd.UploadedBy.Name } : null,
-                    uploadedByRole = sd.UploadedByRole,
-                    uploadedAt = sd.UploadedAt
-                }).ToList(),
+                supportingDocs = supportingDocs,
                 generalComment = checklist.GeneralComment,
                 finalComment = checklist.FinalComment,
                 createdAt = checklist.CreatedAt,
@@ -2187,6 +2171,109 @@ public class CoCreatorController : ControllerBase
             _logger.LogError(ex, "Error fetching active checklists");
             return StatusCode(500, new { message = "Internal server error" });
         }
+    }
+
+    // Helper method to combine supporting docs from both legacy SupportingDocs table and Uploads table
+    private IEnumerable<object> CombineSupportingDocs(Checklist checklist)
+    {
+        var combinedDocs = new List<object>();
+
+        // Add legacy SupportingDocs
+        combinedDocs.AddRange(checklist.SupportingDocs.Select(sd => new
+        {
+            id = sd.Id,
+            _id = sd.Id,
+            name = sd.FileName,
+            fileName = sd.FileName,
+            fileUrl = sd.FileUrl,
+            fileSize = sd.FileSize,
+            fileType = sd.FileType,
+            category = "Supporting Documents",
+            uploadedBy = sd.UploadedBy != null ? new { id = sd.UploadedBy.Id, name = sd.UploadedBy.Name } : null,
+            uploadedByRole = sd.UploadedByRole,
+            uploadedAt = sd.UploadedAt,
+            uploadData = new
+            {
+                fileName = sd.FileName,
+                fileUrl = sd.FileUrl,
+                fileSize = sd.FileSize,
+                fileType = sd.FileType,
+                uploadedBy = sd.UploadedBy?.Name ?? "Unknown",
+                uploadedByRole = sd.UploadedByRole,
+                createdAt = sd.UploadedAt
+            }
+        }));
+
+        return combinedDocs;
+    }
+
+    // Async helper method that includes Uploads table
+    private async Task<List<object>> CombineSupportingDocsWithUploadsAsync(Guid checklistId, Checklist checklist)
+    {
+        var combinedDocs = new List<object>();
+
+        // Fetch supporting documents from Uploads table
+        var uploads = await _context.Uploads
+            .Where(u => u.ChecklistId == checklistId && u.Category == "Supporting Documents")
+            .ToListAsync();
+
+        _logger.LogInformation($"📎 Found {uploads.Count} supporting documents from Uploads table for checklist {checklistId}");
+
+        // Add legacy SupportingDocs
+        combinedDocs.AddRange(checklist.SupportingDocs.Select(sd => new
+        {
+            id = sd.Id,
+            _id = sd.Id,
+            name = sd.FileName,
+            fileName = sd.FileName,
+            fileUrl = sd.FileUrl,
+            fileSize = sd.FileSize,
+            fileType = sd.FileType,
+            category = "Supporting Documents",
+            uploadedBy = sd.UploadedBy != null ? new { id = sd.UploadedBy.Id, name = sd.UploadedBy.Name } : null,
+            uploadedByRole = sd.UploadedByRole,
+            uploadedAt = sd.UploadedAt,
+            uploadData = new
+            {
+                fileName = sd.FileName,
+                fileUrl = sd.FileUrl,
+                fileSize = sd.FileSize,
+                fileType = sd.FileType,
+                uploadedBy = sd.UploadedBy?.Name ?? "Unknown",
+                uploadedByRole = sd.UploadedByRole,
+                createdAt = sd.UploadedAt
+            }
+        }));
+
+        // Add uploads from Uploads table
+        combinedDocs.AddRange(uploads.Select(u => new
+        {
+            id = u.Id,
+            _id = u.Id,
+            name = u.DocumentName ?? u.FileName,
+            fileName = u.FileName,
+            fileUrl = u.FileUrl,
+            fileSize = u.FileSize,
+            fileType = u.FileType,
+            category = "Supporting Documents",
+            uploadedBy = new { id = (Guid?)null, name = u.UploadedBy ?? "RM" },
+            uploadedByRole = u.UploadedByRole,
+            uploadedAt = u.CreatedAt,
+            uploadData = new
+            {
+                fileName = u.FileName,
+                fileUrl = u.FileUrl,
+                fileSize = u.FileSize,
+                fileType = u.FileType,
+                uploadedBy = u.UploadedBy ?? "RM",
+                uploadedByRole = u.UploadedByRole,
+                createdAt = u.CreatedAt
+            }
+        }));
+
+        _logger.LogInformation($"📎 Total supporting docs to return: {combinedDocs.Count}");
+
+        return combinedDocs;
     }
 }
 
