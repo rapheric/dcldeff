@@ -47,6 +47,11 @@ public class Checklist
     // Track who last updated the checklist
     public Guid? LastUpdatedBy { get; set; }
 
+    // DCL Locking support - prevent multiple co-creators from working on same DCL
+    public Guid? LockedByUserId { get; set; }
+    public User? LockedByUser { get; set; }
+    public DateTime? LockedAt { get; set; }
+
     // Navigation properties
     public string? IbpsNo { get; set; }
     public string? Remarks { get; set; }

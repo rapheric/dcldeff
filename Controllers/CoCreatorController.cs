@@ -113,6 +113,7 @@ public class CoCreatorController : ControllerBase
         {
             var checklist = await _context.Checklists
                 .Include(c => c.Documents).ThenInclude(dc => dc.DocList)
+                .Include(c => c.SupportingDocs)
                 .FirstOrDefaultAsync(c => c.Id == id);
             if (checklist == null)
                 return NotFound(new { message = "Checklist not found" });
@@ -172,7 +173,20 @@ public class CoCreatorController : ControllerBase
             _context.ChecklistLogs.Add(updateLog);
             checklist.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
-            return Ok(new { message = "Checklist updated successfully", checklist });
+
+            // Fetch supporting documents from both Uploads and SupportingDocs tables
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(id, checklist);
+
+            return Ok(new {
+                message = "Checklist updated successfully",
+                checklist = new {
+                    id = checklist.Id,
+                    dclNo = checklist.DclNo,
+                    status = checklist.Status.ToString(),
+                    supportingDocs = supportingDocs,
+                    updatedAt = checklist.UpdatedAt
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -532,7 +546,172 @@ public class CoCreatorController : ControllerBase
         }
     }
 
-    // GET /api/cocreatorChecklist/:id
+    // GET /api/cocreatorChecklist/dcls - Get ALL DCLs with cocreatorreview status (for unassigned queue)
+    [HttpGet("dcls")]
+    public async Task<IActionResult> GetAllCoCreatorReviewDcls()
+    {
+        try
+        {
+            var currentUserId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+            _logger.LogInformation("Fetching all cocreatorreview DCLs for user {UserId}", currentUserId);
+
+            var checklists = await _context.Checklists
+                .Include(c => c.CreatedBy)
+                .Include(c => c.AssignedToRM)
+                .Include(c => c.AssignedToCoChecker)
+                .Include(c => c.LockedByUser)
+                .Include(c => c.Documents)
+                    .ThenInclude(dc => dc.DocList)
+                .Where(c => c.Status == Models.ChecklistStatus.CoCreatorReview)
+                .OrderByDescending(c => c.UpdatedAt)
+                .ThenByDescending(c => c.Id)
+                .Select(c => new
+                {
+                    id = c.Id,
+                    dclNo = c.DclNo,
+                    customerNumber = c.CustomerNumber,
+                    customerName = c.CustomerName,
+                    loanType = c.LoanType,
+                    ibpsNo = c.IbpsNo,
+                    status = c.Status.ToString(),
+                    assignedToRMId = c.AssignedToRMId,
+                    createdBy = c.CreatedBy != null ? new { id = c.CreatedBy.Id, name = c.CreatedBy.Name } : null,
+                    assignedToRM = c.AssignedToRM != null ? new { id = c.AssignedToRM.Id, name = c.AssignedToRM.Name } : null,
+                    assignedToCoChecker = c.AssignedToCoChecker != null ? new { id = c.AssignedToCoChecker.Id, name = c.AssignedToCoChecker.Name } : null,
+                    lockedBy = c.LockedByUser != null ? new { id = c.LockedByUser.Id, name = c.LockedByUser.Name } : null,
+                    lockedByUserId = c.LockedByUserId,
+                    lockedAt = c.LockedAt,
+                    documents = c.Documents.Select(dc => new
+                    {
+                        id = dc.Id,
+                        category = dc.Category,
+                        docList = dc.DocList.Select(d => new
+                        {
+                            id = d.Id,
+                            name = d.Name,
+                            status = d.Status.ToString().ToLower(),
+                            creatorStatus = d.CreatorStatus.HasValue ? d.CreatorStatus.ToString().ToLower() : null,
+                            checkerStatus = d.CheckerStatus.ToString().ToLower(),
+                            rmStatus = d.RmStatus.ToString().ToLower(),
+                            fileUrl = d.FileUrl,
+                            comment = d.Comment,
+                            checkerComment = d.CheckerComment,
+                            deferralNumber = d.DeferralNumber,
+                            deferralNo = d.DeferralNumber
+                        }).ToList()
+                    }).ToList(),
+                    createdAt = c.CreatedAt,
+                    updatedAt = c.UpdatedAt
+                })
+                .ToListAsync();
+
+            _logger.LogInformation("Found {Count} cocreatorreview DCLs", checklists.Count);
+            return Ok(checklists);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching cocreatorreview DCLs");
+            return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
+
+    // POST /api/cocreatorChecklist/{id}/lock - Lock a DCL to current user
+    [HttpPost("{id}/lock")]
+    public async Task<IActionResult> LockChecklist(Guid id)
+    {
+        try
+        {
+            var currentUserId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+            if (currentUserId == Guid.Empty)
+            {
+                return Unauthorized(new { message = "User not authenticated" });
+            }
+
+            var checklist = await _context.Checklists.FirstOrDefaultAsync(c => c.Id == id);
+            if (checklist == null)
+            {
+                return NotFound(new { message = "Checklist not found" });
+            }
+
+            // Check if already locked by another user
+            if (checklist.LockedByUserId.HasValue && checklist.LockedByUserId != currentUserId)
+            {
+                var lockedBy = await _context.Users.FindAsync(checklist.LockedByUserId.Value);
+                return Conflict(new
+                {
+                    message = $"DCL is already locked by {lockedBy?.Name}",
+                    lockedBy = new { id = lockedBy?.Id, name = lockedBy?.Name }
+                });
+            }
+
+            // Check if checklist is in cocreatorreview status
+            if (checklist.Status != Models.ChecklistStatus.CoCreatorReview)
+            {
+                return BadRequest(new { message = "DCL is not in Co-Creator Review status" });
+            }
+
+            // Lock the checklist to current user
+            checklist.LockedByUserId = currentUserId;
+            checklist.LockedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("DCL {DCLNo} locked by user {UserId}", checklist.DclNo, currentUserId);
+
+            return Ok(new
+            {
+                message = "DCL locked successfully",
+                lockedBy = new { id = currentUserId },
+                lockedAt = checklist.LockedAt
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error locking checklist {ChecklistId}", id);
+            return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
+
+    // POST /api/cocreatorChecklist/{id}/unlock - Unlock a DCL
+    [HttpPost("{id}/unlock")]
+    public async Task<IActionResult> UnlockChecklist(Guid id)
+    {
+        try
+        {
+            var currentUserId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+            if (currentUserId == Guid.Empty)
+            {
+                return Unauthorized(new { message = "User not authenticated" });
+            }
+
+            var checklist = await _context.Checklists.FirstOrDefaultAsync(c => c.Id == id);
+            if (checklist == null)
+            {
+                return NotFound(new { message = "Checklist not found" });
+            }
+
+            // Only allow the user who locked it to unlock, or admins
+            if (checklist.LockedByUserId.HasValue && checklist.LockedByUserId != currentUserId)
+            {
+                return StatusCode(403, new { message = "You cannot unlock a DCL locked by another user" });
+            }
+
+            // Unlock the checklist
+            checklist.LockedByUserId = null;
+            checklist.LockedAt = null;
+
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("DCL {DCLNo} unlocked by user {UserId}", checklist.DclNo, currentUserId);
+
+            return Ok(new { message = "DCL unlocked successfully" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error unlocking checklist {ChecklistId}", id);
+            return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
+
+    // GET /api/cocreatorChecklist/{id}
     [HttpGet("{id}")]
     public async Task<IActionResult> GetChecklistById(Guid id)
     {
@@ -1428,6 +1607,9 @@ public class CoCreatorController : ControllerBase
                 .Include(c => c.CreatedBy)
                 .FirstOrDefaultAsync(c => c.Id == checklist.Id);
 
+            // Fetch supporting documents from both Uploads and SupportingDocs tables
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(checklist.Id, updatedChecklist);
+
             // 🔍 LOG WHAT'S BEING RETURNED
             _logger.LogWarning($"📤 RESPONSE TO FRONTEND: {updatedChecklist.Documents.Count} document categories");
             foreach (var category in updatedChecklist.Documents)
@@ -1472,18 +1654,7 @@ public class CoCreatorController : ControllerBase
                             deferralNo = d.DeferralNumber
                         }).ToList()
                     }).ToList(),
-                    supportingDocs = updatedChecklist.SupportingDocs.Select(sd => new
-                    {
-                        id = sd.Id,
-                        fileName = sd.FileName,
-                        fileUrl = sd.FileUrl,
-                        fileSize = sd.FileSize,
-                        fileType = sd.FileType,
-                        uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : null,
-                        uploadedById = sd.UploadedById,
-                        uploadedByRole = sd.UploadedByRole,
-                        uploadedAt = sd.UploadedAt
-                    }).ToList(),
+                    supportingDocs = supportingDocs,
                     updatedAt = updatedChecklist.UpdatedAt
                 }
             });
@@ -1685,20 +1856,27 @@ public class CoCreatorController : ControllerBase
                 return NotFound(new { message = "Checklist not found after update" });
             }
 
+            // Fetch supporting documents from both Uploads and SupportingDocs tables
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(id, updatedChecklist);
+
             return Ok(new
             {
                 message = "Checklist submitted to RM successfully",
-                checklistId = id,
-                dclNo = updatedChecklist.DclNo,
-                status = updatedChecklist.Status.ToString(),
-                assignedToRM = updatedChecklist.AssignedToRM != null ? new
+                checklist = new
                 {
-                    id = updatedChecklist.AssignedToRM.Id,
-                    name = updatedChecklist.AssignedToRM.Name,
-                    email = updatedChecklist.AssignedToRM.Email
-                } : null,
-                documentsCount = updatedChecklist.Documents?.Count ?? 0,
-                updatedAt = updatedChecklist.UpdatedAt
+                    id = updatedChecklist.Id,
+                    dclNo = updatedChecklist.DclNo,
+                    status = updatedChecklist.Status.ToString(),
+                    assignedToRM = updatedChecklist.AssignedToRM != null ? new
+                    {
+                        id = updatedChecklist.AssignedToRM.Id,
+                        name = updatedChecklist.AssignedToRM.Name,
+                        email = updatedChecklist.AssignedToRM.Email
+                    } : null,
+                    supportingDocs = supportingDocs,
+                    documentsCount = updatedChecklist.Documents?.Count ?? 0,
+                    updatedAt = updatedChecklist.UpdatedAt
+                }
             });
         }
         catch (Exception ex)
@@ -1775,20 +1953,27 @@ public class CoCreatorController : ControllerBase
                 return NotFound(new { message = "Checklist not found after update" });
             }
 
+            // Fetch supporting documents from both Uploads and SupportingDocs tables
+            var supportingDocs = await CombineSupportingDocsWithUploadsAsync(id, updatedChecklist);
+
             return Ok(new
             {
                 message = "Checklist submitted to Co-Checker successfully",
-                checklistId = id,
-                dclNo = updatedChecklist.DclNo,
-                status = updatedChecklist.Status.ToString(),
-                assignedToCoChecker = updatedChecklist.AssignedToCoChecker != null ? new
+                checklist = new
                 {
-                    id = updatedChecklist.AssignedToCoChecker.Id,
-                    name = updatedChecklist.AssignedToCoChecker.Name,
-                    email = updatedChecklist.AssignedToCoChecker.Email
-                } : null,
-                documentsCount = updatedChecklist.Documents?.Count ?? 0,
-                updatedAt = updatedChecklist.UpdatedAt
+                    id = updatedChecklist.Id,
+                    dclNo = updatedChecklist.DclNo,
+                    status = updatedChecklist.Status.ToString(),
+                    assignedToCoChecker = updatedChecklist.AssignedToCoChecker != null ? new
+                    {
+                        id = updatedChecklist.AssignedToCoChecker.Id,
+                        name = updatedChecklist.AssignedToCoChecker.Name,
+                        email = updatedChecklist.AssignedToCoChecker.Email
+                    } : null,
+                    supportingDocs = supportingDocs,
+                    documentsCount = updatedChecklist.Documents?.Count ?? 0,
+                    updatedAt = updatedChecklist.UpdatedAt
+                }
             });
         }
         catch (Exception ex)

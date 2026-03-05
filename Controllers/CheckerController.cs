@@ -91,7 +91,7 @@ public class CheckerController : ControllerBase
                 .CountAsync();
             _logger.LogInformation($"📊 DEBUG: Checklists assigned to checker {checkerId}: {assignedToThisChecker}");
 
-            var myQueue = await _context.Checklists
+            var checklists = await _context.Checklists
                 .Where(c => c.AssignedToCoCheckerId == checkerId &&
                            c.Status == ChecklistStatus.CoCheckerReview)
                 .Include(c => c.CreatedBy)
@@ -105,7 +105,15 @@ public class CheckerController : ControllerBase
                 .Include(c => c.Logs)
                     .ThenInclude(l => l.User)
                 .OrderByDescending(c => c.UpdatedAt)
-                .Select(c => new
+                .ToListAsync();
+
+            var myQueue = new List<object>();
+
+            foreach (var c in checklists)
+            {
+                var supportingDocs = await CombineSupportingDocsWithUploadsAsync(c.Id, c);
+
+                myQueue.Add(new
                 {
                     id = c.Id,
                     _id = c.Id,
@@ -135,21 +143,11 @@ public class CheckerController : ControllerBase
                             deferralNo = d.DeferralNumber
                         }).ToList()
                     }).ToList(),
-                    supportingDocs = c.SupportingDocs.Select(sd => new
-                    {
-                        id = sd.Id,
-                        _id = sd.Id,
-                        fileName = sd.FileName,
-                        fileUrl = sd.FileUrl,
-                        fileSize = sd.FileSize,
-                        fileType = sd.FileType,
-                        uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : "Unknown",
-                        uploadedAt = sd.UploadedAt
-                    }).ToList(),
+                    supportingDocs = supportingDocs,
                     createdAt = c.CreatedAt,
                     updatedAt = c.UpdatedAt
-                })
-                .ToListAsync();
+                });
+            }
 
             _logger.LogInformation($"📊 Found {myQueue.Count} items in queue for checker {checkerId}");
             return Ok(myQueue);
@@ -170,7 +168,7 @@ public class CheckerController : ControllerBase
         {
             _logger.LogInformation($"🔍 Fetching completed DCLs for checker: {checkerId}");
 
-            var completed = await _context.Checklists
+            var checklists = await _context.Checklists
                 .Where(c => c.AssignedToCoCheckerId == checkerId &&
                            c.Status == ChecklistStatus.Approved)
                 .Include(c => c.CreatedBy)
@@ -181,7 +179,15 @@ public class CheckerController : ControllerBase
                 .Include(c => c.SupportingDocs)
                     .ThenInclude(sd => sd.UploadedBy)
                 .OrderByDescending(c => c.UpdatedAt)
-                .Select(c => new
+                .ToListAsync();
+
+            var completed = new List<object>();
+
+            foreach (var c in checklists)
+            {
+                var supportingDocs = await CombineSupportingDocsWithUploadsAsync(c.Id, c);
+
+                completed.Add(new
                 {
                     id = c.Id,
                     _id = c.Id,
@@ -212,21 +218,11 @@ public class CheckerController : ControllerBase
                             expiryDate = d.ExpiryDate
                         }).ToList()
                     }).ToList(),
-                    supportingDocs = c.SupportingDocs.Select(sd => new
-                    {
-                        id = sd.Id,
-                        _id = sd.Id,
-                        fileName = sd.FileName,
-                        fileUrl = sd.FileUrl,
-                        fileSize = sd.FileSize,
-                        fileType = sd.FileType,
-                        uploadedBy = sd.UploadedBy != null ? sd.UploadedBy.Name : "Unknown",
-                        uploadedAt = sd.UploadedAt
-                    }).ToList(),
+                    supportingDocs = supportingDocs,
                     createdAt = c.CreatedAt,
                     updatedAt = c.UpdatedAt
-                })
-                .ToListAsync();
+                });
+            }
 
             _logger.LogInformation($"📊 Found {completed.Count} completed DCLs");
             return Ok(completed);

@@ -78,6 +78,12 @@ public class ApplicationDbContext : DbContext
                 .HasForeignKey(c => c.AssignedToCoCheckerId)
                 .OnDelete(DeleteBehavior.SetNull);
 
+            // Navigation: User locks checklists (DCL locking feature)
+            entity.HasMany(u => u.LockedChecklists)
+                .WithOne(c => c.LockedByUser)
+                .HasForeignKey(c => c.LockedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             // UserLog relations
             entity.HasMany(u => u.TargetUserLogs)
                 .WithOne(l => l.TargetUser)
