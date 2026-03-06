@@ -145,6 +145,18 @@ public class Deferral
 
     public string? ReworkComments { get; set; }
 
+
+
+
+    // ...existing code...
+
+    public Guid? ClosedById { get; set; }
+    public string? ClosedByName { get; set; }
+    public DateTime? ClosedAt { get; set; }
+
+    // ...existing code...
+
+
     public string? ClosedReason { get; set; }
 
     public int CurrentApproverIndex { get; set; } = 0;
@@ -184,6 +196,7 @@ public class Deferral
 
     [NotMapped]
     public string? LastReturnedByRole { get; set; }
+    // public string ClosedByName { get; internal set; }
 }
 
 public class DeferralCommentEntry

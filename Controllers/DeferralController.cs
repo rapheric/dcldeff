@@ -36,7 +36,12 @@ public class DeferralController : ControllerBase
     {
         try
         {
-            var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+            var userIdClaim = User.FindFirst("id")?.Value;
+            if (!Guid.TryParse(userIdClaim, out var userId))
+            {
+                _logger.LogWarning("Unauthorized request to create deferral: missing or invalid user id claim");
+                return Unauthorized(new { error = "Invalid user context" });
+            }
 
             if (request.SelectedDocuments == null || request.SelectedDocuments.Count == 0)
             {
@@ -452,8 +457,14 @@ public class DeferralController : ControllerBase
         {
             var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
 
+            // Include deferrals the approver has approved OR those they have explicitly rejected
             var deferrals = await _context.Deferrals
-                .Where(d => d.Approvers.Any(a => a.UserId == userId && a.Approved))
+                .Where(d =>
+                    // Any approver record for this user that's marked approved
+                    d.Approvers.Any(a => a.UserId == userId && a.Approved)
+                    // OR the deferral is rejected and this user is one of the approvers (they likely performed the rejection)
+                    || (d.Status == DeferralStatus.Rejected && d.Approvers.Any(a => a.UserId == userId))
+                )
                 .Include(d => d.CreatedBy)
                 .Include(d => d.Facilities)
                 .Include(d => d.Documents)
@@ -518,7 +529,30 @@ public class DeferralController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "🔥 Error generating deferral number");
+            _logger.LogError(ex, "🔥 Error generating deferral number - returning preview fallback");
+            // Return a safe preview-style deferral number instead of 500 to keep frontend resilient
+            var yy = DateTime.UtcNow.Year.ToString().Substring(2);
+            var prefix = $"DEF-{yy}-";
+            var preview = prefix + "0001";
+            return Ok(new { deferralNumber = preview, preview = true });
+        }
+    }
+
+    [HttpGet("preview-number")]
+    [AllowAnonymous]
+    public IActionResult GetPreviewDeferralNumber()
+    {
+        try
+        {
+            var yy = DateTime.UtcNow.Year.ToString().Substring(2);
+            var prefix = $"DEF-{yy}-";
+            // Lightweight preview: not persisted, safe for display
+            var preview = prefix + "TBD";
+            return Ok(new { deferralNumber = preview });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "🔥 Error generating preview deferral number");
             return StatusCode(500, new { error = ex.Message });
         }
     }
@@ -1181,6 +1215,30 @@ public class DeferralController : ControllerBase
                 _logger.LogWarning(emailEx, "⚠️ Deferral approved but failed to notify next approver for {DeferralNumber}", deferral.DeferralNumber);
             }
 
+            // Notify RM that an approver has approved and where the deferral moved next
+            try
+            {
+                var rm = deferral.CreatedBy;
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralApprovalConfirmationAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        nextApprover?.Name ?? nextApprover?.User?.Name,
+                        !hasNextApprover
+                    );
+                }
+            }
+            catch (Exception rmEmailEx)
+            {
+                _logger.LogWarning(rmEmailEx, "⚠️ Deferral approved but failed to notify RM for {DeferralNumber}", deferral.DeferralNumber);
+            }
+
+
+
             _logger.LogInformation($"✅ Deferral {deferral.DeferralNumber} approved by {userId}");
 
             return Ok(new
@@ -1273,6 +1331,27 @@ public class DeferralController : ControllerBase
             await _context.SaveChangesAsync();
             HydrateDeferralComments(deferral);
 
+            // Notify RM that creator approved
+            try
+            {
+                var rm = deferral.CreatedBy ?? await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralApprovalConfirmationAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        null,
+                        false);
+                }
+            }
+            catch (Exception rmNotifyEx)
+            {
+                _logger.LogWarning(rmNotifyEx, "⚠️ Failed to notify RM after creator approval for {DeferralNumber}", deferral.DeferralNumber);
+            }
+
             return Ok(new
             {
                 message = "Approved by creator",
@@ -1352,6 +1431,27 @@ public class DeferralController : ControllerBase
 
             await _context.SaveChangesAsync();
             HydrateDeferralComments(deferral);
+
+            // Notify RM that checker approved (final approval)
+            try
+            {
+                var rm = deferral.CreatedBy ?? await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralApprovalConfirmationAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        null,
+                        true);
+                }
+            }
+            catch (Exception rmNotifyEx)
+            {
+                _logger.LogWarning(rmNotifyEx, "⚠️ Failed to notify RM after checker approval for {DeferralNumber}", deferral.DeferralNumber);
+            }
 
             return Ok(new
             {
@@ -1847,6 +1947,28 @@ public class DeferralController : ControllerBase
             await _context.SaveChangesAsync();
             HydrateDeferralComments(deferral);
 
+            // Notify RM (confirmation of submitted close request)
+            try
+            {
+                var rm = deferral.CreatedBy ?? await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralSubmittedAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        deferral.DaysSought,
+                        "Close Request"
+                    );
+                }
+            }
+            catch (Exception rmCloseEx)
+            {
+                _logger.LogWarning(rmCloseEx, "⚠️ Failed to notify RM after close request submission for {DeferralNumber}", deferral.DeferralNumber);
+            }
+
             _logger.LogInformation("📨 Close request submitted for deferral {DeferralNumber} by RM {UserId}", deferral.DeferralNumber, userId);
 
             return Ok(new
@@ -1913,6 +2035,27 @@ public class DeferralController : ControllerBase
             await _context.SaveChangesAsync();
             HydrateDeferralComments(deferral);
 
+            // Notify RM that close-request was approved by creator
+            try
+            {
+                var rm = await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralApprovalConfirmationAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        null,
+                        false);
+                }
+            }
+            catch (Exception rmNotifyEx)
+            {
+                _logger.LogWarning(rmNotifyEx, "⚠️ Failed to notify RM after close-request creator approval for {DeferralNumber}", deferral.DeferralNumber);
+            }
+
             return Ok(new
             {
                 success = true,
@@ -1976,6 +2119,27 @@ public class DeferralController : ControllerBase
 
             await _context.SaveChangesAsync();
             HydrateDeferralComments(deferral);
+
+            // Notify RM that close-request was approved by checker (final close)
+            try
+            {
+                var rm = await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralApprovalConfirmationAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        null,
+                        true);
+                }
+            }
+            catch (Exception rmNotifyEx)
+            {
+                _logger.LogWarning(rmNotifyEx, "⚠️ Failed to notify RM after close-request checker approval for {DeferralNumber}", deferral.DeferralNumber);
+            }
 
             return Ok(new
             {
@@ -2043,6 +2207,94 @@ public class DeferralController : ControllerBase
         }
     }
 
+    [HttpPost("{id}/withdraw")]
+    public async Task<IActionResult> WithdrawDeferral(Guid id, [FromBody] WithdrawDeferralRequest? request = null)
+    {
+        try
+        {
+            var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+
+            var deferral = await _context.Deferrals
+                .Include(d => d.Approvers)
+                .Include(d => d.CreatedBy)
+                .FirstOrDefaultAsync(d => d.Id == id);
+
+            if (deferral == null)
+                return NotFound(new { error = "Deferral not found" });
+
+            if (deferral.CreatedById.HasValue && deferral.CreatedById != userId)
+                return StatusCode(403, new { error = "Only the RM who created the deferral can withdraw it" });
+
+            if (deferral.Status == DeferralStatus.Rejected)
+                return BadRequest(new { error = "Rejected deferrals cannot be withdrawn" });
+
+            var actorName = User.FindFirst(ClaimTypes.Name)?.Value ?? "RM";
+
+            // Record close/withdraw metadata
+            deferral.Status = DeferralStatus.Closed;
+            deferral.ClosedReason = request?.Reason?.Trim();
+            deferral.ClosedById = userId;
+            deferral.ClosedByName = actorName;
+            deferral.ClosedAt = DateTime.UtcNow;
+            deferral.UpdatedAt = DateTime.UtcNow;
+
+            // Add a comment entry indicating withdrawal
+            var store = ParseDeferralCommentStore(deferral.ReworkComments);
+            var note = string.IsNullOrWhiteSpace(request?.Comment)
+                ? "Withdrawn by RM"
+                : $"Withdrawn by RM: {request.Comment.Trim()}";
+            store.Comments.Add(new DeferralCommentEntry
+            {
+                Text = note,
+                CreatedAt = DateTime.UtcNow,
+                AuthorName = actorName,
+                AuthorRole = "RM",
+                Author = new DeferralCommentAuthor { Name = actorName, Role = "RM" }
+            });
+            deferral.ReworkComments = SerializeDeferralCommentStore(store);
+
+            await _context.SaveChangesAsync();
+
+            // Notify RM (confirmation of withdrawal)
+            try
+            {
+                var rm = deferral.CreatedBy ?? await _context.Users.FindAsync(deferral.CreatedById);
+                if (rm != null && !string.IsNullOrWhiteSpace(rm.Email))
+                {
+                    var rmName = string.IsNullOrWhiteSpace(rm.Name) ? "Relationship Manager" : rm.Name;
+                    await _emailService.SendDeferralSubmittedAsync(
+                        rm.Email,
+                        rmName,
+                        deferral.DeferralNumber,
+                        string.IsNullOrWhiteSpace(deferral.CustomerName) ? "Customer" : deferral.CustomerName,
+                        deferral.DaysSought,
+                        "Withdrawn"
+                    );
+                }
+            }
+            catch (Exception rmCloseEx)
+            {
+                _logger.LogWarning(rmCloseEx, "⚠️ Failed to notify RM after withdrawal for {DeferralNumber}", deferral.DeferralNumber);
+            }
+
+            HydrateDeferralComments(deferral);
+
+            _logger.LogInformation("🛑 Deferral {DeferralNumber} withdrawn by RM {UserId}", deferral.DeferralNumber, userId);
+
+            return Ok(new
+            {
+                success = true,
+                message = "Deferral withdrawn and closed",
+                deferral
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "🔥 Error withdrawing deferral");
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
     // ============================================
     // PDF & EXPORT OPERATIONS
     // ============================================
@@ -2078,22 +2330,39 @@ public class DeferralController : ControllerBase
 
     private async Task<string> GenerateDeferralNumber()
     {
-        var yy = DateTime.UtcNow.Year.ToString().Substring(2);
-        var prefix = $"DEF-{yy}-";
-        var lastDeferral = await _context.Deferrals
-            .Where(d => d.DeferralNumber.StartsWith(prefix))
-            .OrderByDescending(d => d.DeferralNumber)
-            .FirstOrDefaultAsync();
-
-        int seq = 1;
-        if (lastDeferral != null)
+        try
         {
-            var match = System.Text.RegularExpressions.Regex.Match(lastDeferral.DeferralNumber, @"DEF-\d{2}-(\d{4})");
-            if (match.Success && int.TryParse(match.Groups[1].Value, out int lastSeq))
-                seq = lastSeq + 1;
-        }
+            var yy = DateTime.UtcNow.Year.ToString().Substring(2);
+            var prefix = $"DEF-{yy}-";
 
-        return $"{prefix}{seq:D4}";
+            // Collect all existing deferral numbers for this year prefix and determine the max sequence
+            var numbers = await _context.Deferrals
+                .Where(d => d.DeferralNumber != null && d.DeferralNumber.StartsWith(prefix))
+                .Select(d => d.DeferralNumber!)
+                .ToListAsync();
+
+            var maxSeq = 0;
+            var rx = new System.Text.RegularExpressions.Regex(@"DEF-\d{2}-(\d{4})");
+            foreach (var num in numbers)
+            {
+                if (string.IsNullOrWhiteSpace(num)) continue;
+                var m = rx.Match(num);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var s))
+                {
+                    if (s > maxSeq) maxSeq = s;
+                }
+            }
+
+            var seq = maxSeq + 1;
+            return $"{prefix}{seq:D4}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "🔥 Error while generating deferral number; returning safe fallback");
+            // Fallback to a predictable preview-style number to avoid 500s
+            var yy = DateTime.UtcNow.Year.ToString().Substring(2);
+            return $"DEF-{yy}-0001";
+        }
     }
 
     private static List<string> GetApprovalMatrixRoles(List<SelectedDocumentRequest> documents, decimal loanAmount)
@@ -2524,4 +2793,10 @@ public class CloseDocumentCommentRequest
 public class RecallDeferralRequest
 {
     public string? Reason { get; set; }
+}
+
+public class WithdrawDeferralRequest
+{
+    public string? Reason { get; set; }
+    public string? Comment { get; set; }
 }
