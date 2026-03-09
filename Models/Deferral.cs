@@ -1,110 +1,3 @@
-// using System.ComponentModel.DataAnnotations;
-
-// namespace NCBA.DCL.Models;
-
-// public class Deferral
-// {
-//     public Guid Id { get; set; }
-
-//     [Required]
-//     public string DeferralNumber { get; set; } = string.Empty;
-
-//     public string? CustomerNumber { get; set; }
-
-//     public string? CustomerName { get; set; }
-
-//     public string? BusinessName { get; set; }
-
-//     public string? LoanType { get; set; }
-
-//     public int DaysSought { get; set; }
-
-//     public string? DclNumber { get; set; }
-
-//     public DeferralStatus Status { get; set; } = DeferralStatus.Pending;
-
-//     public string? RejectionReason { get; set; }
-
-//     public string? DeferralDescription { get; set; }
-
-//     public string? ReworkComments { get; set; }
-
-//     public string? ClosedReason { get; set; }
-
-//     public int CurrentApproverIndex { get; set; } = 0;
-
-//     public Guid? CreatedById { get; set; }
-//     public User? CreatedBy { get; set; }
-
-//     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-//     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
-
-//     // Navigation properties
-//     public ICollection<Facility> Facilities { get; set; } = new List<Facility>();
-//     public ICollection<DeferralDocument> Documents { get; set; } = new List<DeferralDocument>();
-//     public ICollection<Approver> Approvers { get; set; } = new List<Approver>();
-// }
-
-// public class Facility
-// {
-//     public Guid Id { get; set; }
-
-//     public string? Type { get; set; }
-
-//     public decimal Sanctioned { get; set; }
-
-//     public decimal Balance { get; set; }
-
-//     public decimal Headroom { get; set; }
-
-//     public Guid DeferralId { get; set; }
-//     public Deferral Deferral { get; set; } = null!;
-// }
-
-// public class DeferralDocument
-// {
-//     public Guid Id { get; set; }
-
-//     public string? Name { get; set; }
-
-//     public string? Url { get; set; }
-
-//     public Guid? UploadedById { get; set; }
-//     public User? UploadedBy { get; set; }
-
-//     public Guid DeferralId { get; set; }
-//     public Deferral Deferral { get; set; } = null!;
-// }
-
-// public class Approver
-// {
-//     public Guid Id { get; set; }
-
-//     public Guid? UserId { get; set; }
-//     public User? User { get; set; }
-
-//     public string? Name { get; set; }
-
-//     public string? Role { get; set; }
-
-//     public bool Approved { get; set; } = false;
-
-//     public DateTime? ApprovedAt { get; set; }
-
-//     public Guid DeferralId { get; set; }
-//     public Deferral Deferral { get; set; } = null!;
-// }
-
-// public enum DeferralStatus
-// {
-//     Pending,
-//     InReview,
-//     Approved,
-//     Rejected,
-//     ReturnedForRework
-// }
-
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -125,6 +18,7 @@ public class Deferral
 
     public string? LoanType { get; set; }
 
+    [NotMapped]
     public decimal? LoanAmount { get; set; }
 
     public int DaysSought { get; set; }
@@ -145,19 +39,12 @@ public class Deferral
 
     public string? ReworkComments { get; set; }
 
+    public string? ClosedReason { get; set; }
 
-
-
-    // ...existing code...
-
+    // Who closed/withdrew the deferral (nullable)
     public Guid? ClosedById { get; set; }
     public string? ClosedByName { get; set; }
     public DateTime? ClosedAt { get; set; }
-
-    // ...existing code...
-
-
-    public string? ClosedReason { get; set; }
 
     public int CurrentApproverIndex { get; set; } = 0;
 
@@ -196,7 +83,6 @@ public class Deferral
 
     [NotMapped]
     public string? LastReturnedByRole { get; set; }
-    // public string ClosedByName { get; internal set; }
 }
 
 public class DeferralCommentEntry
@@ -243,6 +129,11 @@ public class DeferralDocument
 
     public Guid DeferralId { get; set; }
     public Deferral Deferral { get; set; } = null!;
+
+    // Per-document deferral metadata
+    public int? DaysSought { get; set; }
+
+    public DateTime? NextDocumentDueDate { get; set; }
 }
 
 public class Approver
