@@ -255,7 +255,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.CreatorApprovalStatus).HasConversion<string>();
             entity.Property(e => e.CheckerApprovalStatus).HasConversion<string>();
 
-            entity.HasOne(e => e.Deferral).WithMany().HasForeignKey(e => e.DeferralId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Deferral).WithMany(d => d.Extensions).HasForeignKey(e => e.DeferralId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.RequestedBy).WithMany().HasForeignKey(e => e.RequestedById).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.CreatorApprovedBy).WithMany().HasForeignKey(e => e.CreatorApprovedById).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.CheckerApprovedBy).WithMany().HasForeignKey(e => e.CheckerApprovedById).OnDelete(DeleteBehavior.SetNull);

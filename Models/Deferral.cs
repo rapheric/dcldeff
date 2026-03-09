@@ -83,6 +83,10 @@ public class Deferral
 
     [NotMapped]
     public string? LastReturnedByRole { get; set; }
+
+    // Extension references
+    public string? ExtensionStatus { get; set; }
+    public ICollection<Extension> Extensions { get; set; } = new List<Extension>();
 }
 
 public class DeferralCommentEntry

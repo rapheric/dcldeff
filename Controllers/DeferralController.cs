@@ -643,6 +643,36 @@ public class DeferralController : ControllerBase
                 }
             }
 
+            // Handle selected documents update (for removing documents during resubmission)
+            if (request.SelectedDocuments != null)
+            {
+                // Keep track of which documents to keep by name
+                var documentsToKeep = request.SelectedDocuments
+                    .Where(d => !string.IsNullOrWhiteSpace(d.Name))
+                    .Select(d => d.Name!)
+                    .ToList();
+
+                // Remove documents that are no longer in the selectedDocuments list
+                var documentsToRemove = deferral.Documents
+                    .Where(d => !documentsToKeep.Contains(d.Name))
+                    .ToList();
+
+                _context.DeferralDocuments.RemoveRange(documentsToRemove);
+
+                // Update per-document metadata (DaysSought, NextDocumentDueDate)
+                foreach (var selectedDoc in request.SelectedDocuments)
+                {
+                    if (string.IsNullOrWhiteSpace(selectedDoc.Name)) continue;
+
+                    var existingDoc = deferral.Documents.FirstOrDefault(d => d.Name == selectedDoc.Name);
+                    if (existingDoc != null)
+                    {
+                        existingDoc.DaysSought = selectedDoc.DaysSought;
+                        existingDoc.NextDocumentDueDate = selectedDoc.NextDocumentDueDate;
+                    }
+                }
+            }
+
             var requestedApprovers = request.ApproverFlow ?? request.Approvers;
             Guid? previousFirstApproverUserId = null;
             Guid? updatedFirstApproverUserId = null;
@@ -887,6 +917,23 @@ public class DeferralController : ControllerBase
             }
 
             HydrateDeferralComments(deferral);
+
+            // Reload deferral with documents to ensure they're fresh after any removals
+            var refreshedDeferral = await _context.Deferrals
+                .Include(d => d.CreatedBy)
+                .Include(d => d.Facilities)
+                .Include(d => d.Documents)
+                    .ThenInclude(doc => doc.UploadedBy)
+                .Include(d => d.Approvers)
+                    .ThenInclude(a => a.User)
+                .FirstOrDefaultAsync(d => d.Id == id);
+
+            if (refreshedDeferral != null)
+            {
+                ApplyApproverOrdering(refreshedDeferral);
+                HydrateDeferralComments(refreshedDeferral);
+                return Ok(new { success = true, deferral = refreshedDeferral });
+            }
 
             return Ok(new { success = true, deferral });
         }
@@ -1598,6 +1645,140 @@ public class DeferralController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "🔥 Error adding deferral comment");
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // ============================================
+    // EXTENSION OPERATIONS
+    // ============================================
+
+    [HttpPost("{id}/extensions")]
+    public async Task<IActionResult> SubmitExtension(Guid id, [FromBody] SubmitExtensionRequest request)
+    {
+        try
+        {
+            _logger.LogInformation("📥 [SubmitExtension] Received request for deferral {DeferralId}", id);
+
+            if (request == null)
+            {
+                _logger.LogWarning("⚠️ [SubmitExtension] Request body is null");
+                return BadRequest(new { error = "Request body is required" });
+            }
+
+            _logger.LogInformation("📦 [SubmitExtension] Request properties: ExtensionDaysByDocument={DocCount}, Comment={CommentLen}, FileUrls={FileCount}",
+                request.ExtensionDaysByDocument?.Count ?? 0,
+                request.Comment?.Length ?? 0,
+                request.FileUrls?.Count ?? 0);
+
+            if (request.ExtensionDaysByDocument != null)
+            {
+                foreach (var kvp in request.ExtensionDaysByDocument)
+                {
+                    _logger.LogInformation("[SubmitExtension] Doc: '{DocKey}' = {Days} days", kvp.Key, kvp.Value);
+                }
+            }
+
+            var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
+
+            var deferral = await _context.Deferrals
+                .Include(d => d.Approvers)
+                    .ThenInclude(a => a.User)
+                .FirstOrDefaultAsync(d => d.Id == id);
+
+            if (deferral == null)
+            {
+                _logger.LogWarning("⚠️ [SubmitExtension] Deferral not found: {DeferralId}", id);
+                return NotFound(new { error = "Deferral not found" });
+            }
+
+            // Validate that the current user is the RM (created the deferral)
+            if (deferral.CreatedById != userId)
+            {
+                _logger.LogWarning("⚠️ [SubmitExtension] Unauthorized RM: {UserId}, DeferralCreatedBy: {CreatedById}", userId, deferral.CreatedById);
+                return StatusCode(403, new { error = "Only the RM who created the deferral can submit extensions" });
+            }
+
+            if (request?.ExtensionDaysByDocument == null || request.ExtensionDaysByDocument.Count == 0)
+            {
+                _logger.LogWarning("⚠️ [SubmitExtension] No extension days provided");
+                return BadRequest(new { error = "At least one document extension is required" });
+            }
+
+            // Calculate total requested days (max per document)
+            var totalDays = request.ExtensionDaysByDocument.Values.DefaultIfEmpty(0).Max();
+
+            // Create extension record
+            var extension = new Extension
+            {
+                Id = Guid.NewGuid(),
+                DeferralId = deferral.Id,
+                DeferralNumber = deferral.DeferralNumber,
+                CustomerName = deferral.CustomerName,
+                CustomerNumber = deferral.CustomerNumber,
+                DclNumber = deferral.DclNumber,
+                LoanAmount = deferral.LoanAmount,
+                NextDueDate = deferral.NextDueDate,
+                NextDocumentDueDate = deferral.NextDocumentDueDate,
+                SlaExpiry = deferral.SlaExpiry,
+                CurrentDaysSought = deferral.DaysSought,
+                RequestedDaysSought = totalDays,
+                ExtensionReason = request.Comment ?? "Extension requested",
+                Status = ExtensionStatus.PendingApproval,
+                RequestedById = userId,
+                RequestedDate = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+
+            // Add approvers (copy from deferral approvers)
+            if (deferral.Approvers != null && deferral.Approvers.Count > 0)
+            {
+                var approvers = OrderApproversForFlow(deferral.Approvers);
+                foreach (var approver in approvers)
+                {
+                    extension.Approvers.Add(new ExtensionApprover
+                    {
+                        Id = Guid.NewGuid(),
+                        ExtensionId = extension.Id,
+                        UserId = approver.UserId,
+                        User = approver.User,
+                        Role = approver.Role,
+                        ApprovalStatus = ApproverApprovalStatus.Pending,
+                    });
+                }
+            }
+
+            _context.Extensions.Add(extension);
+            await _context.SaveChangesAsync();
+
+            // Update deferral to reflect extension request
+            deferral.ExtensionStatus = extension.Status.ToString();
+            deferral.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("✅ [SubmitExtension] Extension created successfully: {ExtensionId}", extension.Id);
+
+            return StatusCode(201, new
+            {
+                success = true,
+                extension = new
+                {
+                    id = extension.Id,
+                    deferralId = extension.DeferralId,
+                    deferralNumber = extension.DeferralNumber,
+                    status = extension.Status.ToString(),
+                    requestedDaysSought = extension.RequestedDaysSought,
+                    extendedDaysByDoc = request.ExtensionDaysByDocument,
+                    comment = request.Comment,
+                    createdAt = extension.CreatedAt,
+                },
+                message = "Extension submitted successfully",
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "🔥 Error submitting extension for deferral {DeferralId}", id);
             return StatusCode(500, new { error = ex.Message });
         }
     }
@@ -2727,6 +2908,7 @@ public class UpdateDeferralRequest
     public List<UpdateApproverRequest>? ApproverFlow { get; set; }
     public string? ResubmissionComments { get; set; }
     public DeferralStatus? Status { get; set; }
+    public List<SelectedDocumentRequest>? SelectedDocuments { get; set; }
 }
 
 public class UpdateApproverRequest
@@ -2831,4 +3013,11 @@ public class WithdrawDeferralRequest
 {
     public string? Reason { get; set; }
     public string? Comment { get; set; }
+}
+
+public class SubmitExtensionRequest
+{
+    public Dictionary<string, int>? ExtensionDaysByDocument { get; set; }
+    public string? Comment { get; set; }
+    public List<string>? FileUrls { get; set; }
 }
