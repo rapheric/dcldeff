@@ -7,6 +7,7 @@ using NCBA.DCL.Middleware;
 using NCBA.DCL.Models;
 using NCBA.DCL.Services;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace NCBA.DCL.Controllers;
 
@@ -43,18 +44,50 @@ public class ExtensionController : ControllerBase
             var userId = Guid.Parse(User.FindFirst("id")?.Value ?? string.Empty);
             var userName = User.FindFirst("name")?.Value ?? "User";
 
-            var deferral = await _context.Deferrals.FindAsync(request.DeferralId);
+            // Load deferral with all related data needed for validation and extension creation
+            var deferral = await _context.Deferrals
+                .Include(d => d.Approvers)
+                    .ThenInclude(a => a.User)
+                .Include(d => d.Documents)  // Load documents for fallback calculation
+                .FirstOrDefaultAsync(d => d.Id == request.DeferralId);
+
             if (deferral == null)
                 return NotFound(new { message = "Deferral not found" });
 
             if (deferral.Status != DeferralStatus.Approved)
                 return BadRequest(new { message = "Can only apply for extension on approved deferrals" });
 
-            if (deferral.DaysSought < 1)
-                return BadRequest(new { message = $"Deferral must have valid daysSought field (current value: {deferral.DaysSought})" });
+            // Deserialize SelectedDocuments from JSON to get accurate DaysSought data
+            DeserializeSelectedDocuments(deferral);
 
-            if (request.RequestedDaysSought <= deferral.DaysSought)
-                return BadRequest(new { message = $"Requested days ({request.RequestedDaysSought}) must be greater than current days ({deferral.DaysSought})" });
+            // Determine the current DaysSought value - use main field, or calculate from selected documents if 0
+            var currentDaysSought = deferral.DaysSought > 0 ? deferral.DaysSought : 0;
+
+            // Fallback 1: Try to get max from SelectedDocuments (JSON)
+            if (currentDaysSought < 1 && deferral.SelectedDocuments != null && deferral.SelectedDocuments.Any())
+            {
+                currentDaysSought = deferral.SelectedDocuments
+                    .Where(d => d.DaysSought.HasValue && d.DaysSought > 0)
+                    .Max(d => d.DaysSought ?? 0);
+
+                _logger.LogWarning($"[EXTENSION] Main DaysSought was 0, using max from SelectedDocuments: {currentDaysSought}");
+            }
+
+            // Fallback 2: If still 0, try to get max from DeferralDocuments table (for old deferrals)
+            if (currentDaysSought < 1 && deferral.Documents != null && deferral.Documents.Any())
+            {
+                currentDaysSought = deferral.Documents
+                    .Where(d => d.DaysSought.HasValue && d.DaysSought > 0)
+                    .Max(d => d.DaysSought ?? 0);
+
+                _logger.LogWarning($"[EXTENSION] SelectedDocuments was empty, using max from DeferralDocuments table: {currentDaysSought}");
+            }
+
+            if (currentDaysSought < 1)
+                return BadRequest(new { message = $"Deferral must have valid daysSought field (current value: {currentDaysSought})" });
+
+            if (request.RequestedDaysSought <= currentDaysSought)
+                return BadRequest(new { message = $"Requested days ({request.RequestedDaysSought}) must be greater than current days ({currentDaysSought})" });
 
             // Create extension
             var extension = new Extension
@@ -68,7 +101,7 @@ public class ExtensionController : ControllerBase
                 NextDueDate = deferral.NextDueDate,
                 NextDocumentDueDate = deferral.NextDocumentDueDate,
                 SlaExpiry = deferral.SlaExpiry,
-                CurrentDaysSought = deferral.DaysSought,
+                CurrentDaysSought = currentDaysSought,
                 RequestedDaysSought = request.RequestedDaysSought,
                 ExtensionReason = request.ExtensionReason,
                 RequestedById = userId,
@@ -133,6 +166,11 @@ public class ExtensionController : ControllerBase
             });
 
             _context.Extensions.Add(extension);
+
+            // Update deferral to indicate it has a pending extension
+            deferral.ExtensionStatus = ExtensionStatus.PendingApproval.ToString();
+            deferral.UpdatedAt = DateTime.UtcNow;
+
             await _context.SaveChangesAsync();
 
             // Send email notification to first approver
@@ -306,6 +344,24 @@ public class ExtensionController : ControllerBase
                 // Note: Logic to actually update the deferral days might go here or require creator/checker finalization depending on exact reqs
             }
 
+            // Update deferral's extension status to match
+            var deferral = await _context.Deferrals
+                .Include(d => d.Approvers)
+                .FirstOrDefaultAsync(d => d.Id == extension.DeferralId);
+            if (deferral != null)
+            {
+                deferral.ExtensionStatus = extension.Status.ToString();
+                deferral.UpdatedAt = DateTime.UtcNow;
+
+                // Mark the corresponding deferral approver as approved
+                var deferralApprover = deferral.Approvers.FirstOrDefault(a => a.UserId == userId);
+                if (deferralApprover != null)
+                {
+                    deferralApprover.Approved = true;
+                    deferralApprover.ApprovedAt = DateTime.UtcNow;
+                }
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Extension approved", extension });
@@ -358,6 +414,24 @@ public class ExtensionController : ControllerBase
                 Date = DateTime.UtcNow,
                 Comment = request.Reason
             });
+
+            // Update deferral's extension status to match
+            var deferral = await _context.Deferrals
+                .Include(d => d.Approvers)
+                .FirstOrDefaultAsync(d => d.Id == extension.DeferralId);
+            if (deferral != null)
+            {
+                deferral.ExtensionStatus = extension.Status.ToString();
+                deferral.UpdatedAt = DateTime.UtcNow;
+
+                // Mark the corresponding deferral approver as rejected
+                var deferralApprover = deferral.Approvers.FirstOrDefault(a => a.UserId == userId);
+                if (deferralApprover != null)
+                {
+                    deferralApprover.Rejected = true;
+                    deferralApprover.RejectedAt = DateTime.UtcNow;
+                }
+            }
 
             await _context.SaveChangesAsync();
 
@@ -472,6 +546,14 @@ public class ExtensionController : ControllerBase
                 Comment = request.Reason
             });
 
+            // Update deferral's extension status to match
+            var deferral = await _context.Deferrals.FindAsync(extension.DeferralId);
+            if (deferral != null)
+            {
+                deferral.ExtensionStatus = extension.Status.ToString();
+                deferral.UpdatedAt = DateTime.UtcNow;
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Extension rejected by creator", extension });
@@ -548,6 +630,8 @@ public class ExtensionController : ControllerBase
             if (extension.Deferral != null)
             {
                 extension.Deferral.DaysSought = extension.RequestedDaysSought;
+                extension.Deferral.ExtensionStatus = extension.Status.ToString();
+                extension.Deferral.UpdatedAt = DateTime.UtcNow;
                 // Potentially update deferral status or add note
             }
 
@@ -594,6 +678,14 @@ public class ExtensionController : ControllerBase
                 Comment = request.Reason
             });
 
+            // Update deferral's extension status to match
+            var deferral = await _context.Deferrals.FindAsync(extension.DeferralId);
+            if (deferral != null)
+            {
+                deferral.ExtensionStatus = extension.Status.ToString();
+                deferral.UpdatedAt = DateTime.UtcNow;
+            }
+
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Extension rejected by checker", extension });
@@ -632,6 +724,33 @@ public class ExtensionController : ControllerBase
         {
             _logger.LogError(ex, "Error getting extension by id");
             return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
+
+    // ================================
+    // HELPER METHODS
+    // ================================
+
+    private static void DeserializeSelectedDocuments(Deferral deferral)
+    {
+        if (deferral == null || string.IsNullOrWhiteSpace(deferral.SelectedDocumentsJson))
+        {
+            deferral!.SelectedDocuments = new List<SelectedDocumentData>();
+            return;
+        }
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            deferral.SelectedDocuments = JsonSerializer.Deserialize<List<SelectedDocumentData>>(
+                deferral.SelectedDocumentsJson,
+                options
+            ) ?? new List<SelectedDocumentData>();
+        }
+        catch (Exception ex)
+        {
+            // If deserialization fails, return empty list
+            deferral.SelectedDocuments = new List<SelectedDocumentData>();
         }
     }
 }

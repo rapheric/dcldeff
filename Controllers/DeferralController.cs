@@ -1,3 +1,4 @@
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -193,6 +194,28 @@ public class DeferralController : ControllerBase
                         NextDocumentDueDate = selectedDoc.NextDocumentDueDate.HasValue ? DateTime.SpecifyKind(selectedDoc.NextDocumentDueDate.Value, DateTimeKind.Utc) : null
                     });
                 }
+
+                // After adding all documents, set the main deferral.DaysSought to the max from documents
+                // This ensures the deferral has a valid DaysSought for extension requests later
+                var maxDocumentDays = request.SelectedDocuments
+                    .Where(d => d.DaysSought.HasValue && d.DaysSought > 0)
+                    .Max(d => d.DaysSought ?? 0);
+
+                if (maxDocumentDays > 0)
+                {
+                    deferral.DaysSought = maxDocumentDays;
+                    _logger.LogWarning($"[DEFERRAL-CREATE] Set deferral.DaysSought to {maxDocumentDays} (max from {request.SelectedDocuments.Count} documents)");
+                }
+
+                // Also store selected documents as JSON for later retrieval/comparison
+                try
+                {
+                    deferral.SelectedDocumentsJson = JsonSerializer.Serialize(request.SelectedDocuments);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[DEFERRAL-CREATE] Failed to serialize selected documents to JSON");
+                }
             }
 
             for (var approverIndex = 0; approverIndex < request.Approvers.Count; approverIndex++)
@@ -320,6 +343,7 @@ public class DeferralController : ControllerBase
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             _logger.LogInformation($"📊 Fetched {deferrals.Count} pending deferrals");
             return Ok(deferrals);
@@ -343,11 +367,13 @@ public class DeferralController : ControllerBase
                 .Include(d => d.Documents)
                     .ThenInclude(doc => doc.UploadedBy)
                 .Include(d => d.Approvers)
+                .Include(d => d.Extensions)
                 .OrderByDescending(d => d.UpdatedAt)
                 .ToListAsync();
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             _logger.LogInformation($"✅ Fetched {deferrals.Count} approved deferrals");
             return Ok(deferrals);
@@ -379,6 +405,7 @@ public class DeferralController : ControllerBase
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             return Ok(deferrals);
         }
@@ -403,11 +430,13 @@ public class DeferralController : ControllerBase
                 .Include(d => d.Documents)
                     .ThenInclude(doc => doc.UploadedBy)
                 .Include(d => d.Approvers)
+                .Include(d => d.Extensions)
                 .OrderByDescending(d => d.CreatedAt)
                 .ToListAsync();
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             return Ok(deferrals);
         }
@@ -447,6 +476,7 @@ public class DeferralController : ControllerBase
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             return Ok(deferrals);
         }
@@ -482,6 +512,7 @@ public class DeferralController : ControllerBase
 
             deferrals.ForEach(ApplyApproverOrdering);
             deferrals.ForEach(HydrateDeferralComments);
+            deferrals.ForEach(DeserializeSelectedDocuments);
 
             return Ok(deferrals);
         }
@@ -511,6 +542,7 @@ public class DeferralController : ControllerBase
 
             ApplyApproverOrdering(deferral);
             HydrateDeferralComments(deferral);
+            DeserializeSelectedDocuments(deferral);
 
             return Ok(deferral);
         }
@@ -617,10 +649,14 @@ public class DeferralController : ControllerBase
         {
             var deferral = await _context.Deferrals
                 .Include(d => d.Approvers)
+                .Include(d => d.Documents)  // CRITICAL: Must load documents to delete them
+                .Include(d => d.Facilities)  // Also include other relationships that might be updated
                 .FirstOrDefaultAsync(d => d.Id == id);
 
             if (deferral == null)
                 return NotFound(new { error = "Deferral not found" });
+
+            _logger.LogWarning($"[DEFERRAL-DELETE-FETCH] Loaded deferral {id} with {deferral.Documents?.Count ?? 0} documents");
 
             // Update allowed fields
             if (!string.IsNullOrEmpty(request.DeferralDescription))
@@ -646,32 +682,94 @@ public class DeferralController : ControllerBase
             // Handle selected documents update (for removing documents during resubmission)
             if (request.SelectedDocuments != null)
             {
-                // Keep track of which documents to keep by name
-                var documentsToKeep = request.SelectedDocuments
+                _logger.LogWarning($"[DEFERRAL-DELETE-RECV] Received {request.SelectedDocuments.Count} selectedDocuments from frontend");
+                foreach (var doc in request.SelectedDocuments)
+                {
+                    _logger.LogWarning($"[DEFERRAL-DELETE-RECV]   - Name: '{doc.Name}', Type: '{doc.Type}'");
+                }
+
+                // selectedDocuments from frontend contains the documents the user wants to KEEP
+                // Documents that are NOT in this list should be removed from DeferralDocuments table
+                var selectedDocumentNames = request.SelectedDocuments
                     .Where(d => !string.IsNullOrWhiteSpace(d.Name))
-                    .Select(d => d.Name!)
-                    .ToList();
+                    .Select(d => d.Name!.Trim().ToLowerInvariant())
+                    .ToHashSet();
 
-                // Remove documents that are no longer in the selectedDocuments list
+                _logger.LogWarning($"[DEFERRAL-DELETE-NORM] Normalized names to KEEP ({selectedDocumentNames.Count}): {string.Join(" | ", selectedDocumentNames)}");
+                _logger.LogWarning($"[DEFERRAL-DELETE-DB] Current DB has {deferral.Documents.Count} documents:");
+                foreach (var dbDoc in deferral.Documents)
+                {
+                    var normName = (dbDoc.Name ?? "").Trim().ToLowerInvariant();
+                    var shouldKeep = selectedDocumentNames.Contains(normName);
+                    _logger.LogWarning($"[DEFERRAL-DELETE-DB]   - '{dbDoc.Name}' (normalized: '{normName}') -> {(shouldKeep ? "KEEP" : "REMOVE")}");
+                }
+
+                // Remove DeferralDocuments that are no longer in selectedDocuments (user deleted them)
+                // Use case-insensitive comparison for document name matching
                 var documentsToRemove = deferral.Documents
-                    .Where(d => !documentsToKeep.Contains(d.Name))
+                    .Where(d => !selectedDocumentNames.Contains((d.Name ?? "").Trim().ToLowerInvariant()))
                     .ToList();
 
-                _context.DeferralDocuments.RemoveRange(documentsToRemove);
+                _logger.LogWarning($"[DEFERRAL-DELETE-ACTION] Will remove {documentsToRemove.Count} of {deferral.Documents.Count} documents");
+                foreach (var docToRemove in documentsToRemove)
+                {
+                    _logger.LogWarning($"[DEFERRAL-DELETE-ACTION]   Removing: '{docToRemove.Name}'");
+                }
+
+                if (documentsToRemove.Count > 0)
+                {
+                    _logger.LogWarning($"[DEFERRAL-DELETE-ACTION] Actually calling RemoveRange for {documentsToRemove.Count} documents");
+                    _context.DeferralDocuments.RemoveRange(documentsToRemove);
+                }
+                else
+                {
+                    _logger.LogWarning($"[DEFERRAL-DELETE-ACTION] No documents matched for removal");
+                }
 
                 // Update per-document metadata (DaysSought, NextDocumentDueDate)
                 foreach (var selectedDoc in request.SelectedDocuments)
                 {
                     if (string.IsNullOrWhiteSpace(selectedDoc.Name)) continue;
 
-                    var existingDoc = deferral.Documents.FirstOrDefault(d => d.Name == selectedDoc.Name);
+                    var selectedDocNameLower = selectedDoc.Name.Trim().ToLowerInvariant();
+                    var existingDoc = deferral.Documents.FirstOrDefault(d =>
+                        (d.Name ?? "").Trim().ToLowerInvariant() == selectedDocNameLower);
                     if (existingDoc != null)
                     {
                         existingDoc.DaysSought = selectedDoc.DaysSought;
                         existingDoc.NextDocumentDueDate = selectedDoc.NextDocumentDueDate;
+                        _logger.LogWarning($"[DEFERRAL-DELETE-META] Updated metadata for '{existingDoc.Name}'");
                     }
                 }
+
+                // Persist selected documents as JSON for later retrieval
+                try
+                {
+                    deferral.SelectedDocumentsJson = JsonSerializer.Serialize(request.SelectedDocuments);
+                    _logger.LogWarning($"[DEFERRAL-DELETE-JSON] Serialized {request.SelectedDocuments.Count} selected documents to JSON");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[DEFERRAL-DELETE-JSON] Failed to serialize selected documents");
+                }
+
+                // Update main deferral DaysSought field to match the maximum DaysSought from selected documents
+                // This ensures the deferral.DaysSought field is valid for extension submissions
+                var maxDaysSought = request.SelectedDocuments
+                    .Where(d => d.DaysSought.HasValue && d.DaysSought > 0)
+                    .Max(d => d.DaysSought ?? 0);
+
+                if (maxDaysSought > 0)
+                {
+                    deferral.DaysSought = maxDaysSought;
+                    _logger.LogWarning($"[DEFERRAL-DAYSSOUGHT] Updated deferral.DaysSought to {maxDaysSought} (max from {request.SelectedDocuments.Count} selected documents)");
+                }
+                else
+                {
+                    _logger.LogWarning($"[DEFERRAL-DAYSSOUGHT] No valid DaysSought found in selected documents, keeping current value: {deferral.DaysSought}");
+                }
             }
+
 
             var requestedApprovers = request.ApproverFlow ?? request.Approvers;
             Guid? previousFirstApproverUserId = null;
@@ -822,7 +920,21 @@ public class DeferralController : ControllerBase
             }
 
             deferral.UpdatedAt = DateTime.UtcNow;
+
+            // Log state before SaveChanges
+            _logger.LogWarning($"[DEFERRAL-DELETE-SAVE] Before SaveChanges: Deferral has {deferral.Documents.Count} documents");
+            foreach (var doc in deferral.Documents)
+            {
+                _logger.LogWarning($"[DEFERRAL-DELETE-SAVE]   - '{doc.Name}' (EntityState: {_context.Entry(doc).State})");
+            }
+
             await _context.SaveChangesAsync();
+
+            _logger.LogWarning($"[DEFERRAL-DELETE-SAVE] After SaveChanges: Deferral has {deferral.Documents.Count} documents");
+            foreach (var doc in deferral.Documents)
+            {
+                _logger.LogWarning($"[DEFERRAL-DELETE-SAVE]   - '{doc.Name}' (EntityState: {_context.Entry(doc).State})");
+            }
 
             if (
                 previousFirstApproverUserId.HasValue
@@ -932,6 +1044,7 @@ public class DeferralController : ControllerBase
             {
                 ApplyApproverOrdering(refreshedDeferral);
                 HydrateDeferralComments(refreshedDeferral);
+                DeserializeSelectedDocuments(refreshedDeferral);
                 return Ok(new { success = true, deferral = refreshedDeferral });
             }
 
@@ -2878,6 +2991,29 @@ public class DeferralController : ControllerBase
                 break;
         }
     }
+
+    private static void DeserializeSelectedDocuments(Deferral deferral)
+    {
+        if (deferral == null || string.IsNullOrWhiteSpace(deferral.SelectedDocumentsJson))
+        {
+            deferral!.SelectedDocuments = new List<SelectedDocumentData>();
+            return;
+        }
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            deferral.SelectedDocuments = JsonSerializer.Deserialize<List<SelectedDocumentData>>(
+                deferral.SelectedDocumentsJson,
+                options
+            ) ?? new List<SelectedDocumentData>();
+        }
+        catch (Exception ex)
+        {
+            // If deserialization fails, return empty list
+            deferral.SelectedDocuments = new List<SelectedDocumentData>();
+        }
+    }
 }
 
 // ============================================
@@ -3021,3 +3157,9 @@ public class SubmitExtensionRequest
     public string? Comment { get; set; }
     public List<string>? FileUrls { get; set; }
 }
+
+
+
+
+
+

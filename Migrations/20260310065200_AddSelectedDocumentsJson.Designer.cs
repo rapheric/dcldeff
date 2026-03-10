@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NCBA.DCL.Data;
 
@@ -11,9 +12,11 @@ using NCBA.DCL.Data;
 namespace NCBA.DCL.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260310065200_AddSelectedDocumentsJson")]
+    partial class AddSelectedDocumentsJson
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -39,18 +42,6 @@ namespace NCBA.DCL.Migrations
 
                     b.Property<string>("Name")
                         .HasColumnType("longtext");
-
-                    b.Property<bool>("Rejected")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<DateTime?>("RejectedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<bool>("Returned")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<DateTime?>("ReturnedAt")
-                        .HasColumnType("datetime(6)");
 
                     b.Property<string>("Role")
                         .HasColumnType("longtext");

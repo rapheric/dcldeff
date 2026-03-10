@@ -60,6 +60,12 @@ public class Deferral
     public ICollection<DeferralDocument> Documents { get; set; } = new List<DeferralDocument>();
     public ICollection<Approver> Approvers { get; set; } = new List<Approver>();
 
+    // Store selected/requested documents as JSON to persist what was originally requested
+    public string? SelectedDocumentsJson { get; set; }
+
+    [NotMapped]
+    public List<SelectedDocumentData>? SelectedDocuments { get; set; }
+
     [NotMapped]
     public string? RmReason { get; set; }
 
@@ -155,8 +161,25 @@ public class Approver
 
     public DateTime? ApprovedAt { get; set; }
 
+    public bool Rejected { get; set; } = false;
+
+    public DateTime? RejectedAt { get; set; }
+
+    public bool Returned { get; set; } = false;
+
+    public DateTime? ReturnedAt { get; set; }
+
     public Guid DeferralId { get; set; }
     public Deferral Deferral { get; set; } = null!;
+}
+
+public class SelectedDocumentData
+{
+    public string? Name { get; set; }
+    public string? Type { get; set; }
+    public string? Category { get; set; }
+    public int? DaysSought { get; set; }
+    public DateTime? NextDocumentDueDate { get; set; }
 }
 
 public enum DeferralStatus
