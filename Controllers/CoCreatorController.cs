@@ -177,9 +177,11 @@ public class CoCreatorController : ControllerBase
             // Fetch supporting documents from both Uploads and SupportingDocs tables
             var supportingDocs = await CombineSupportingDocsWithUploadsAsync(id, checklist);
 
-            return Ok(new {
+            return Ok(new
+            {
                 message = "Checklist updated successfully",
-                checklist = new {
+                checklist = new
+                {
                     id = checklist.Id,
                     dclNo = checklist.DclNo,
                     status = checklist.Status.ToString(),
@@ -1106,6 +1108,7 @@ public class CoCreatorController : ControllerBase
         {
             var checklists = await _context.Checklists
                 .Where(c => c.CreatedById == creatorId)
+                .Include(c => c.CreatedBy)
                 .Include(c => c.AssignedToRM)
                 .Include(c => c.AssignedToCoChecker)
                 .Include(c => c.Documents)
@@ -1124,6 +1127,7 @@ public class CoCreatorController : ControllerBase
                     assignedToRMId = c.AssignedToRMId,
                     createdAt = c.CreatedAt,
                     updatedAt = c.UpdatedAt,
+                    createdBy = c.CreatedBy != null ? new { id = c.CreatedBy.Id, name = c.CreatedBy.Name } : null,
                     assignedToRM = c.AssignedToRM != null ? new { id = c.AssignedToRM.Id, name = c.AssignedToRM.Name } : null,
                     assignedToCoChecker = c.AssignedToCoChecker != null ? new { id = c.AssignedToCoChecker.Id, name = c.AssignedToCoChecker.Name } : null,
                     documents = c.Documents.Select(dc => new
