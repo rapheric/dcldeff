@@ -199,7 +199,9 @@ public class DeferralController : ControllerBase
                 // This ensures the deferral has a valid DaysSought for extension requests later
                 var maxDocumentDays = request.SelectedDocuments
                     .Where(d => d.DaysSought.HasValue && d.DaysSought > 0)
-                    .Max(d => d.DaysSought ?? 0);
+                    .Select(d => d.DaysSought ?? 0)
+                    .DefaultIfEmpty(0)
+                    .Max();
 
                 if (maxDocumentDays > 0)
                 {
